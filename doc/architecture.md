@@ -462,6 +462,9 @@ listen       = "127.0.0.1:1080"
 - `ssh` exits (E5): `host_key` (pinned fingerprint), `user`, `password_ref` or `key_ref`.
 - `connect [flags] [profile]`: `-datapath`, `-resolver` (one resolver for this run),
   `-no-kill-switch`, `-allow-leak`, `-v`, `-config` — the csqtt-cli meanings.
+- Commands: `connect`, `profile add|set|import|show|rm|list`, `resolvers check`, `menu`,
+  `version`. Secrets are asked only by hidden input or read from stdin, never taken from
+  arguments; `profile show` prints where a secret lives, not its value.
 - Unknown keys and a secret written into the TOML are errors, as in csqtt-cli.
 - **Links** — `profile import`, below.
 
