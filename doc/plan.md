@@ -35,6 +35,10 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 - Carried over within E1: a full session over DoH and DoT and the new uTLS fingerprints
   against public resolvers are first seen live (S8); `profiles.toml`, `Save` and its sudo
   tests (S6).
+- Open checks: `TestApplyReadsV6Only` (netguard) skips without IPv6 in the kernel; CI
+  runs tests without `-v`, so it is not yet confirmed that it runs there rather than
+  skips. uTLS stays at `v1.7.x` until the randomized-hello bug of `v1.8` is fixed
+  (`architecture.md` §04; `TestDefaultUTLSFingerprints` catches it).
 - Open decisions: the license (MIT recommended, `analysis.md` §6) — needed before the
   first release (E4).
 - Working notes in `doc/local/` do not survive a cloud session (the directory is outside
