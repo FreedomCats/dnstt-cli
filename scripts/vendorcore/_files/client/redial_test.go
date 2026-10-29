@@ -210,17 +210,23 @@ func TestDoTRedialStopsOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The round trip makes sure the echo server holds the connection that drop breaks.
+	roundTrip(t, c, []byte("before"))
 	d.fail(-1)
 	e.drop()
 	// The send loop notices the broken connection on its next write; in a session
 	// DNSPacketConn polls all the time.
+	deadline := time.Now().Add(10 * time.Second)
 	for len(d.times()) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d redials after the drop, want 3", len(d.times()))
+		}
 		c.WriteTo([]byte("poll"), turbotunnel.DummyAddr{})
 		time.Sleep(10 * time.Millisecond)
 	}
 	c.Close()
 	n := len(d.times())
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for goroutinesOf("(*TLSPacketConn)") != "" {
 		if time.Now().After(deadline) {
 			t.Fatalf("goroutines left after Close:\n\n%s", goroutinesOf("(*TLSPacketConn)"))

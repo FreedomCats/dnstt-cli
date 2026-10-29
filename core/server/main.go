@@ -820,7 +820,6 @@ func run(privkey []byte, domain dns.Name, upstream string, dnsConn net.PacketCon
 	}()
 
 	ch := make(chan *record, 100)
-	defer close(ch)
 
 	// We could run multiple copies of sendLoop; that would allow more time
 	// for each response to collect downstream data before being evicted by

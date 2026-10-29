@@ -81,7 +81,7 @@ func to(s string) *string { return &s }
 
 // rules are the patches. The package and import conversion is done by convertGo, not by
 // rules.
-var rules = slices.Concat(p1Rules, p2Rules, logfRules)
+var rules = slices.Concat(p1Rules, p2Rules, logfRules, serverRules)
 
 var p1Rules = []rule{
 	// P1: every socket of the core comes from the dialer of the session (§06). uTLS
@@ -243,4 +243,18 @@ func transportLogf(file string, calls int, from, sig, literal string) []rule {
 		{File: file, Count: calls, Pattern: `()\blog\.Printf\(`, Replace: to("c.logf(")},
 		{File: file, Count: 1, Pattern: `(?m)^()\t"log"\n`, Replace: to("")},
 	}
+}
+
+// serverRules: the server is built only into the tests of the client
+// (core/server/testing.go).
+var serverRules = []rule{
+	// run returns when the first of its loops ends and closes the channel the receive loop
+	// sends on; when TestServer.Close closes the socket, the receive loop may still be
+	// handling a query and panics with "send on closed channel". The channel stays open;
+	// an idle send loop stays blocked on it, a leak of a test server only.
+	{
+		File: "server/main.go", Count: 1,
+		Pattern: `(?m)^(\t)ch := make\(chan \*record, 100\)\n\tdefer close\(ch\)$`,
+		Replace: to("${1}ch := make(chan *record, 100)"),
+	},
 }
