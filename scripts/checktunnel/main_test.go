@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/FreedomCats/dnstt-cli/internal/winsys"
 )
 
 // TestRunOffline runs the snapshot on the real system without the network: all sections
@@ -16,7 +18,7 @@ func TestRunOffline(t *testing.T) {
 	run(&b, options{label: "test", name: "dnstt-cli", offline: true})
 	out := b.String()
 	for _, s := range []string{"— test ===", "-- dnstt-cli.exe processes", "-- Adapters", "-- Routes /0 and /1",
-		"-- WFP: DNS protection", "-- Registry", "NRPT", "{3307B858-2357-4C8A-8349-A5F7FD1A0255}"} {
+		"-- WFP: DNS protection", "-- Registry", "NRPT", strings.ToUpper(winsys.AdapterGUID.String())} {
 		if !strings.Contains(out, s) {
 			t.Errorf("output lacks %q:\n%s", s, out)
 		}
