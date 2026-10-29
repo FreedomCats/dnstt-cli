@@ -51,8 +51,12 @@ compares `core/` with the upstream and the rules, the upstream version is in
 module of dnstt-cli; `dnstt-client` stops being `package main`.
 
 Upstream files stay as close to verbatim as possible. New code lives in separate files of
-`core/` that `vendorcore` puts in from `scripts/vendorcore/files/` (the csqtt-cli layout):
-the session API (§04) and the bootstrap resolver.
+`core/` that `vendorcore` puts in from `scripts/vendorcore/_files/` (the csqtt-cli layout;
+the underscore keeps `go build ./...` from compiling them outside `core/`): the session API
+(§04), the transports with the socket hook, the in-process test server and, later, the
+bootstrap resolver. `go vet` runs on `core/` with `-testinggoroutine=false`: two upstream
+`noise` tests call `t.Fatal` from a goroutine. `core/` is never run through `gofmt`: the
+rewritten import paths change the order of imports.
 
 **Why.** The core is small and in Go, so a process boundary gives nothing and costs a
 protocol. In-process the core's sockets can be bound to the physical interface without a
@@ -174,7 +178,8 @@ dnstt-cli/
 │   ├── CORE_VERSION           //   upstream version and source
 │   ├── COPYING                //   from the upstream
 │   ├── dns/ · noise/ · turbotunnel/
-│   └── client/                //   dnstt-client as a package + session API (§04)
+│   ├── client/                //   dnstt-client as a package + session API (§04)
+│   └── server/                //   dnstt-server as a package, used only by tests
 ├── internal/
 │   ├── cli/                   // connect · resolvers · profile · menu · wizard · privileges
 │   ├── config/                // profiles · validation · secrets · links
@@ -198,6 +203,7 @@ dnstt-cli/
 │   └── secretservice/         // Linux: keyring
 ├── scripts/
 │   ├── vendorcore/            // carrying the core over by rules (R1) · socket guard (§06)
+│   │   └── _files/            //   own files of core/
 │   ├── wintun/                // wintun.dll with hash and signature check
 │   ├── release/ · notices/    // release archives · dependency licenses
 │   └── checktunnel/           // system snapshot before and after a run
@@ -215,30 +221,46 @@ Packages without the "NEW" mark come from csqtt-cli and are reworked for dnstt.
 package client // core/client, new files next to the upstream ones
 
 type Config struct {
-    Domain    dns.Name
-    PubKey    []byte
-    Resolver  Resolver                // doh | dot | udp, address pinned or a host name
-    UTLS      string                  // uTLS distribution, upstream syntax of -utls
-    Control   func(network, address string, c syscall.RawConn) error // R4
-    LookupIP  func(ctx context.Context, host string) ([]netip.Addr, error) // R5
-    Logf      func(format string, args ...any)
+    Domain           dns.Name
+    PubKey           []byte
+    Resolver         Resolver // {Transport: DoH | DoT | UDP, Address: URL or host:port}
+    UTLS             string   // upstream syntax of -utls; "" — DefaultUTLS, "none" — Go TLS
+    Control          func(network, address string, c syscall.RawConn) error // R4
+    LookupIP         func(ctx context.Context, host string) ([]netip.Addr, error) // R5
+    KeepAliveTimeout time.Duration // client smux timeout; 0 — upstream's 2 min
+    Logf             func(format string, args ...any)
 }
 
-// Dial builds transport → DNSPacketConn → KCP → Noise → smux and returns after the
-// Noise handshake, or with an error when ctx ends first.
+// Dial builds transport → DNSPacketConn → KCP → Noise → smux with the settings of
+// upstream run and returns after the Noise handshake, or with an error when ctx ends first.
 func Dial(ctx context.Context, cfg Config) (*Session, error)
 
 type Session struct{ /* … */ }
 
 func (s *Session) OpenStream() (net.Conn, error)
-func (s *Session) Done() <-chan struct{} // closed when the session died
-func (s *Session) Err() error            // why it died
-func (s *Session) Stats() Stats          // bytes, streams, KCP counters
+func (s *Session) Done() <-chan struct{} // closed when the session ended and its sockets closed
+func (s *Session) Err() error            // ErrClosed (Close) or ErrSilent (keepalive timeout)
+func (s *Session) Stats() Stats          // open streams, bytes of the Noise channel, KCP RTT
 func (s *Session) Close() error
 ```
 
+- Every socket of a session is made by it (`sockets` in `transport.go`) and closed with it;
+  the dials in progress end with it too. A closed session leaves no goroutines: upstream
+  keeps its transport loops forever (one session per process), so they end on close by
+  rules (§07, P1).
+- DoH takes only `https://` URLs: an `http://` one would go to `http.DefaultTransport`
+  past the hook.
+- A host name of a resolver goes through `LookupIP`; without it the system resolver
+  answers until P4.
+- The smux keepalive interval is the library's 10 s, or half the timeout if that is
+  shorter. smux checks the timeout once per its period, so a dead session ends between one
+  and two timeouts after the last data.
+
 The exit sits on top: `exit.Dialer` turns a stream into a connection to `host:port`
 (SOCKS5 `CONNECT`, SSH `direct-tcpip`). Datapaths see only `exit.Dialer`.
+
+`core/server/testing.go` starts the upstream server `run` in-process on loopback UDP with a
+generated key; the session tests run against it.
 
 ---
 
@@ -346,18 +368,30 @@ address over UDP. README says this plainly and points to `tun` for full protecti
 
 ## 06. Tunnel bypass
 
+Upstream `main` and `run` are not used; the session builds its sockets in `transport.go`
+(added file) and hands its dial function to the upstream uTLS code (a rule).
+
 | # | Where | What | Binding |
 |---|---|---|---|
-| 1 | `main.go` · `net.ListenUDP` | UDP-mode queries | `net.ListenConfig{Control}`, on every per-query socket (P3) |
-| 2 | `utls.go` · `utlsDialContext` | TCP to DoH/DoT with uTLS | `net.Dialer{Control}` |
-| 3 | `main.go` · `http.Transport` | DoH without uTLS | `DialContext` with the same dialer |
-| 4 | `main.go` · `tls.Dialer` | DoT without uTLS | `NetDialer` with the same dialer |
-| 5 | bootstrap resolver (new) | names of resolvers | own UDP/TCP sockets with `Control` |
+| 1 | `transport.go` · `sockets.listenUDP` | UDP-mode queries | `net.ListenConfig{Control}`; a socket per query with P3 |
+| 2 | `utls.go` · `utlsDialContext` | TCP to DoH/DoT with uTLS | `dial` of the caller (rule) = `sockets.dial`: `net.Dialer{Control}` |
+| 3 | `transport.go` · `http.Transport` | DoH without uTLS | `DialContext: sockets.dial`, no proxy |
+| 4 | `transport.go` · DoT dialer | DoT without uTLS | `tls.Client` over `sockets.dial` |
+| 5 | bootstrap resolver (new, E1) | names of resolvers | own UDP/TCP sockets with `Control` |
 
-**Guard**, as `TestNetguardCoverage` in qwdtt-cli and the socket guard in csqtt-cli: a test
-over `core/` that finds every call creating a socket or resolving a name and checks it
-against this table. A new call site after a core update fails `vendorcore -check` and the
-tests instead of looping traffic through the adapter.
+The HTTP/1.1 transport of uTLS DoH is a clone of `http.DefaultTransport`; a rule gives it
+`sockets.dial` as `DialContext` and takes away its proxy from the environment, which would
+otherwise carry the connection past the hook.
+
+**Guard** (`scripts/vendorcore/sockets.go`), as `TestNetguardCoverage` in qwdtt-cli and the
+socket guard in csqtt-cli: `vendorcore` parses every non-test Go file of `core/` and finds
+each use of an API that creates a socket, resolves a name or builds an HTTP client (`net`,
+`crypto/tls`, `net/http`, `http2`, `utls`, `kcp`, raw sockets), by the package it is
+imported from. Each place — file, function, identifier, count — must be in a table with a
+reason: a hooked point above, upstream `main`/`run` that is never called, or the server
+used only by tests. `net.Dialer` and `net.ListenConfig` of the hook must set `Control`. A
+new place after a core update fails the transfer and `vendorcore -check` instead of
+looping traffic through the adapter.
 
 **Network change** — `netguard.Watch` from csqtt-cli: a new default-route interface
 restarts the session at once, without the backoff.
@@ -370,7 +404,7 @@ All as `vendorcore` rules on top of the upstream (R1), each with a test.
 
 | # | Patch | Why | Stage |
 |---|---|---|---|
-| P1 | `dnstt-client` as a package; session API and `Control` in new files | R1, R2, R4 | E0 |
+| P1 | `dnstt-client` as a package; session API and `Control` in new files; uTLS dials through its caller's function; transport loops end and TLS stops redialing when their conn is closed | R1, R2, R4 | E0 |
 | P2 | DoT redial with a backoff instead of giving up | `analysis.md` §1, item 2 | E1 |
 | P3 | UDP mode: a socket per query (or a small rotating pool) | `analysis.md` §1, item 3 | E1 |
 | P4 | names of DoH/DoT resolvers through `LookupIP` instead of the system | R5 | E1 |
@@ -559,7 +593,10 @@ Formats and behaviour are facts and are implemented anew.
 ### E0. Foundation
 
 Go module, the csqtt-cli packages without VK, captcha and `coreproc`, `scripts/vendorcore`
-and `core/` from the mirror with P1, CI for Linux and Windows.
+and `core/` from the mirror with P1, CI for Linux and Windows. Done: Go 1.26.2; the core
+dependencies at the upstream versions (`flynn/noise` 1.0.0, `utls` 1.6.6, `kcp-go` 5.6.8,
+`smux` 1.5.24), the shared `x/crypto` and `x/net` raised to the csqtt-cli versions; the
+carried packages translated into English; `SO_MARK` 0x1076 and new adapter and WFP GUIDs.
 
 ### E1. `socks` with reconnection — Linux and Windows
 

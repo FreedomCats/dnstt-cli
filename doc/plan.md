@@ -23,10 +23,11 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 ## Status
 
-- Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan.
-- Next: E0, starting with F0.
+- Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
+  E0 (results below, under "E0. Foundation").
+- Next: E1, starting with S0 (the user's test server) and S1 (core patches P2–P5).
 - Open decisions: the license (MIT recommended, `analysis.md` §6) — needed before the
-  first release (E4), not for E0.
+  first release (E4).
 - Working notes in `doc/local/` do not survive a cloud session (the directory is outside
   git): everything a new session needs is in this file and in `architecture.md`.
 
@@ -34,11 +35,25 @@ Update this section at the end of every session.
 
 ---
 
-## E0. Foundation
+## E0. Foundation — done
 
 Goal: the repository builds, the core is vendored and tested, the packages carried over
 from csqtt-cli pass their tests, CI is green on Linux and Windows. No server or network
 access to a tunnel is needed yet.
+
+**Result.** Go 1.26.2; `core/` is the mirror at `v1.20260501.0` with P1 (15 rules, 5 own
+files in `scripts/vendorcore/_files/`), checked in CI against the mirror. The session API
+dials the upstream server run in-process and passes its tests under `-race`: parallel
+streams, one `Control` call per socket, the end of a session when the server goes silent,
+no goroutines left after `Close`, DoH and DoT connecting through `Control`. The socket
+guard parses `core/` and fails on any socket outside its table. The csqtt-cli packages are
+carried with new GUIDs and `SO_MARK` (0x1076) and translated into English. Deviations from
+the tasks below, each recorded in `architecture.md`: own core files in `_files/` (a plain
+`files/` was compiled by `go build ./...`); uTLS takes a dial *function* from its caller,
+not a `*net.Dialer` — `LookupIP` has to sit between the name and the socket; P1 also ends
+the upstream transport loops on close (upstream never closes a session); `distcheck` moves
+to E4 with the release scripts. Not covered yet: a full session over DoH or DoT (the
+in-process server speaks UDP only) — S8.
 
 ### F0. Workspace (no commit)
 
@@ -155,7 +170,7 @@ its own. Test environment variables `CSQTT_TEST_*` → `DNSTT_CLI_TEST_*`.
 | `lines` | everything | — |
 | `config` | config directory, file ownership under `sudo`, secret stores (DPAPI, keyring, file) | profile schema, validation, `csqtt://` links — rewritten in E1 and E4 |
 | `datapath` | `datapath.go` interfaces (`Requirements`, `Persistent`, `Reserver`, `DNSGuard`, `IPv6Blocker`) | `link*`, `tunfd*` (channels to a core process); `socks*`, `netstack`, `tun*` come in E1 and E2 |
-| `scripts` | `internal/script`, `internal/wintun`, `wintun`, `checktunnel`, `ctrlbreak`, `distcheck`, `sha256sums` | `buildcore`; `release`, `notices`, `releasenotes` — in E4 |
+| `scripts` | `internal/script`, `internal/wintun`, `wintun`, `checktunnel`, `ctrlbreak`, `sha256sums` | `buildcore`; `release`, `notices`, `releasenotes`, `distcheck` — in E4 |
 
 The `tailscale/wf` fork comes with the same `replace` as in csqtt-cli. Comments carried
 over may stay in Russian (`AGENTS.md`, "Language"); new and changed comments are English.
@@ -190,25 +205,102 @@ alone.
 
 ---
 
-## E1. `socks` with reconnection — outline
+## E1. `socks` with reconnection
 
-Detailed at the end of E0.
+Goal (`architecture.md` §12): a browser goes through `dnstt-cli connect` in `socks` mode to
+the server's `danted` with a login, on Linux and Windows, and the session survives a
+server restart and a network change. Tasks in order; S1–S3 do not depend on each other.
 
-- **S0. Test server.** The user's own dnstt server with `danted` and a login; its values
-  live only in `doc/local/`. Plus the in-process server of F3 for automated tests.
-- **S1. P2–P5.** DoT redial with backoff; a socket per query in UDP mode; `LookupIP` for
-  resolver names (bootstrap over bound sockets, `@address` pins); newer uTLS.
-- **S2. Exit — `internal/exit`.** SOCKS5 client over a stream: `CONNECT` with a domain or an
-  address, no auth or RFC 1929 login; a login refusal is its own error type.
-- **S3. Resolvers — `internal/resolvers`.** The list, `doh:`/`dot:`/`udp:` parsing, presets
-  with addresses, health and putting aside.
-- **S4. Supervisor.** States of §08, backoff, server silence on the first connect,
-  `Restart`, the second Ctrl+C; the measured keepalive timeout.
-- **S5. `socks` datapath.** Local SOCKS5 server on loopback → exit; refusals at once.
-- **S6. Profiles and secrets.** `profiles.toml` schema of §10, validation, the exit password
-  in the secret store.
-- **S7. Commands.** `connect`, `profile add|set|show|rm|list`, `resolvers check`, the status
-  line.
-- **S8. Live acceptance.** A browser through `socks` to the server's `danted` with a login;
-  the session survives a server restart and a network change; `resolvers check` on a list
-  with a dead resolver.
+### S0. Test server (no commit)
+
+- The user's own dnstt server: `dnstt-server` with `danted` behind it, a SOCKS5 login. Its
+  domain, key, address, login and the resolvers that pass the tunnel from the user's
+  network live only in `doc/local/plan-e1.md` (`AGENTS.md`).
+- A live-run script in `doc/runs/` that starts upstream `dnstt-client` against it, so a
+  failure can be told apart: server or dnstt-cli.
+
+**Done when** upstream `dnstt-client` plus `curl --socks5-hostname` through it reaches a
+site, over DoH and over UDP.
+
+### S1. Core patches P2–P5
+
+As rules and own files, each with a test against the in-process server where it can be
+made:
+
+- **P2** — DoT redial with a backoff (1·2^n s up to 64 s) instead of giving up after one
+  failed redial; the session's end stops it.
+- **P3** — UDP mode: a socket per query (or a small rotating pool), all through `Control`;
+  the per-query socket is opened for the resolver's family. Check `netguard`'s choice of
+  families for a `udp6` socket on `:0` (E0 note: it is taken as dual-stack).
+- **P4** — host names of DoH/DoT resolvers through `LookupIP` only; the `net.DefaultResolver`
+  entry leaves the guard table. The bootstrap resolver itself is S3.
+- **P5** — newer uTLS and its fingerprints; `DefaultUTLS` follows the upstream default or
+  is our own, decided here.
+- The upstream `log` output of the core goes to `Config.Logf` (a rule or a logger set per
+  session), so `-v` shows it and the default output stays quiet.
+
+**Done when** the tests of each patch pass, the guard table is updated, `vendorcore -check`
+passes.
+
+### S2. Exit — `internal/exit`
+
+SOCKS5 client over a stream: `CONNECT` with a domain or an address, authentication "none"
+or RFC 1929 login; a login refusal is its own error type (`Stopping` in the supervisor),
+other failures are retries. `exit.Dialer` over a function that opens a stream.
+
+**Done when** tests against a SOCKS5 server in the test (with and without a login, wrong
+password, refused `CONNECT`) pass, and a test through the in-process dnstt server reaches
+an echo server behind a SOCKS5 server.
+
+### S3. Resolvers — `internal/resolvers`
+
+The list of a profile: `doh:URL`, `dot:host:port`, `udp:host:port`, `@address` pins;
+presets with built-in addresses; the bootstrap resolver for host names over sockets with
+`Control` (point 5 of §06); health: a resolver that fails the handshake or kills sessions
+repeatedly is put aside for a while.
+
+**Done when** parsing, presets, pins, the bootstrap resolver (against a DNS server in the
+test) and putting aside are tested.
+
+### S4. Supervisor — `internal/supervisor`
+
+States of §08: dialing through the list, a handshake timeout, backoff after a full round,
+server silence on the first connect (stop, naming the four reasons), `Restart` from
+`netguard.Watch`, the second Ctrl+C. The client keepalive timeout measured on the live
+server (S0) and set.
+
+**Done when** state tests with a fake dialer pass, and a test with the in-process server
+sees a session recreated after the server restarts.
+
+### S5. `socks` datapath — `internal/datapath`
+
+Local SOCKS5 server on loopback (default `127.0.0.1:1080`) → `exit.Dialer`; `BIND`,
+`UDP ASSOCIATE` and "no session" refused at once; the listener opens before the first
+session. From csqtt-cli `socks5.go` (server protocol) where it fits.
+
+**Done when** tests with a SOCKS5 client in the test pass through the in-process server.
+
+### S6. Profiles and secrets — `internal/config`
+
+`profiles.toml` schema of §10, validation (unknown keys and secrets in the TOML are
+errors), the exit password in the secret store; `Save` with its ownership tests under sudo
+(left out of E0).
+
+**Done when** load, save, validation and secret tests pass on Linux and Windows.
+
+### S7. Commands
+
+`connect`, `profile add|set|show|rm|list`, `resolvers check` (a real handshake through
+every resolver, exit code 1 if none passes), the status line.
+
+**Done when** command tests pass and `dnstt-cli connect` works against the in-process
+server in a test.
+
+### S8. Live acceptance
+
+A browser through `socks` to the server's `danted` with a login, over DoH, DoT and UDP; the
+session survives a server restart and a network change; `resolvers check` on a list with a
+dead resolver. On Linux and Windows. Results without environment in this file, the course
+of the runs in `doc/local/plan-e1.md`.
+
+**Done when** all of the above is seen live and recorded.
