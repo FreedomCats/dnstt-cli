@@ -96,6 +96,12 @@ not an error in every app.
 `UDP ASSOCIATE` is not carried: the relay needs UDP straight to the server, and the tunnel
 has only streams.
 
+The SOCKS5 messages go one at a time, each after the answer to the previous one: three
+round trips through DNS before the first byte of a connection with a login, two without.
+Sending them all in one write saves one or two, but a server that reads one message per
+`recv` drops the rest and hangs. It is turned on only if `danted` is seen to take it (S8 of
+`plan.md`), and then as a setting of the exit.
+
 ### R4. The core's own sockets bypass the tunnel through one hook
 
 In `tun` all system traffic goes into the adapter, and the core's queries to the resolver

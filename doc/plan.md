@@ -25,9 +25,9 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 - Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
   E0 (results below, under "E0. Foundation").
-- E1: S1 done (core patches P2–P5, results under S1). Next: S0 (the user's test server)
-  and S2 (exit) or S3 (resolvers), which do not depend on each other. S0 needs the user:
-  the server's values are asked for in chat and kept only in `doc/local/plan-e1.md`.
+- E1: S1 (core patches P2–P5) and S2 (exit) done, results under each. Next: S3
+  (resolvers); S0 (the user's test server) when the user has one: the server's values are
+  asked for in chat and kept only in `doc/local/plan-e1.md`.
 - CI is green on `main` (`linux`: test, netns, core; `windows`: test, core).
 - A new session first sets up the workspace as in F0: the mirror as `../dnstt` and
   csqtt-cli as `../csqtt-cli`; `go run ./scripts/vendorcore -check` and `go test ./...`
@@ -272,7 +272,22 @@ made:
 **Done when** the tests of each patch pass, the guard table is updated, `vendorcore -check`
 passes.
 
-### S2. Exit — `internal/exit`
+### S2. Exit — `internal/exit` — done
+
+**Result.** `exit.Dialer` (`Dial(ctx, "host:port")`) and its SOCKS5 implementation over
+`exit.OpenStream` (`Session.OpenStream`). A host that parses as an address goes as IPv4 or
+IPv6, anything else as a name resolved on the server. The greeting always offers "none", and
+"username/password" too when the profile has a login, so an exit open to anyone never gets
+the password. Errors: `*LoginError` (wrong login, a login required and the profile has
+none, no offered method accepted) — `IsLogin` is the supervisor's reason to stop;
+`*ConnectError` with the RFC 1928 reply code for the datapath to pass on; `ErrNotSOCKS5`
+for an exit that answers as something else; anything else is of the stream or the session.
+`Check(ctx)` logs in without a request, for the supervisor on a new session. The exchange
+is bounded by ctx and by 60 s of its own; the stream comes back without deadlines, and the
+reply is read to its end, so the target's first bytes stay in the stream. Messages go one
+at a time, each after its answer (`architecture.md` R3). Tests against a SOCKS5 server in
+the test, in memory and through the in-process dnstt server (a name to an echo server, a
+refused port, a wrong password), all under `-race`.
 
 SOCKS5 client over a stream: `CONNECT` with a domain or an address, authentication "none"
 or RFC 1929 login; a login refusal is its own error type (`Stopping` in the supervisor),
@@ -330,7 +345,8 @@ server in a test.
 
 A browser through `socks` to the server's `danted` with a login, over DoH, DoT and UDP; the
 session survives a server restart and a network change; `resolvers check` on a list with a
-dead resolver. On Linux and Windows. Results without environment in this file, the course
-of the runs in `doc/local/plan-e1.md`.
+dead resolver. Whether `danted` takes the SOCKS5 greeting, login and request in one write
+(two round trips less per connection, R3). On Linux and Windows. Results without
+environment in this file, the course of the runs in `doc/local/plan-e1.md`.
 
 **Done when** all of the above is seen live and recorded.
