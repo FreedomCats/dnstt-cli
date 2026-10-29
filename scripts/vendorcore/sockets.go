@@ -61,8 +61,6 @@ var socketSites = []socketSite{
 		Reason: "points 2–4: TCP to DoH and DoT resolvers, with uTLS and without"},
 	{File: "client/transport.go", Func: "sockets.listenUDP", Name: "net.ListenConfig", Count: 1, Control: true,
 		Reason: "point 1: UDP-mode queries"},
-	{File: "client/transport.go", Func: "sockets.lookup", Name: "net.DefaultResolver", Count: 1,
-		Reason: "host names of resolvers when Config.LookupIP is nil: the system resolver, until P4 (E1)"},
 	{File: "client/transport.go", Func: "openTransport", Name: "net/http.Transport", Count: 1,
 		Reason: "DoH without uTLS: DialContext is sockets.dial, no proxy"},
 	{File: "client/utls.go", Func: "makeRoundTripper", Name: "golang.org/x/net/http2.Transport", Count: 1,

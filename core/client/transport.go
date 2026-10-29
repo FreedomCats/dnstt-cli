@@ -39,7 +39,7 @@ const (
 type Resolver struct {
 	Transport Transport
 	// Address is the URL for DoH (https only) and host:port for DoT and UDP. A host name
-	// is resolved by Config.LookupIP.
+	// is resolved by Config.LookupIP only.
 	Address string
 }
 
@@ -102,18 +102,16 @@ func (s *sockets) closeAll() {
 }
 
 // lookup gives the addresses of host: the address itself if host is one, otherwise
-// Config.LookupIP. Without LookupIP the system resolver answers (until P4).
+// Config.LookupIP (P4). The system resolver is never asked: under the kill-switch it is
+// closed, and without it the name of the tunnel's resolver would go to the ISP.
 func (s *sockets) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip.Unmap()}, nil
 	}
-	var ips []netip.Addr
-	var err error
-	if s.cfg.LookupIP != nil {
-		ips, err = s.cfg.LookupIP(ctx, host)
-	} else {
-		ips, err = net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err := s.canLookup(host); err != nil {
+		return nil, err
 	}
+	ips, err := s.cfg.LookupIP(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", host, err)
 	}
@@ -124,6 +122,16 @@ func (s *sockets) lookup(ctx context.Context, host string) ([]netip.Addr, error)
 		ips[i] = ips[i].Unmap()
 	}
 	return ips, nil
+}
+
+// canLookup reports whether lookup can give the addresses of host. DoH and DoT dial when
+// they first send, after Dial has started the handshake; openTransport asks this first, so
+// that a host name without LookupIP fails Dial at once.
+func (s *sockets) canLookup(host string) error {
+	if _, err := netip.ParseAddr(host); err == nil || s.cfg.LookupIP != nil {
+		return nil
+	}
+	return fmt.Errorf("resolving %s: a host name needs Config.LookupIP", host)
 }
 
 // dial is the dialFunc of the session: a TCP connection with Control, to the addresses
@@ -204,6 +212,9 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 		if u.Scheme != "https" || u.Host == "" {
 			return nil, nil, fmt.Errorf("DoH URL %q: must start with https://", r.Address)
 		}
+		if err := s.canLookup(u.Hostname()); err != nil {
+			return nil, nil, err
+		}
 		var rt http.RoundTripper
 		if id == nil {
 			// The fields of http.DefaultTransport, without its dialer and its proxy from
@@ -228,8 +239,12 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 		return turbotunnel.DummyAddr{}, pconn, nil
 
 	case DoT:
-		if _, _, err := net.SplitHostPort(r.Address); err != nil {
+		host, _, err := net.SplitHostPort(r.Address)
+		if err != nil {
 			return nil, nil, fmt.Errorf("DoT address: %w", err)
+		}
+		if err := s.canLookup(host); err != nil {
+			return nil, nil, err
 		}
 		dialTLS := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if id != nil {

@@ -39,7 +39,8 @@ type Config struct {
 	// Control is put on every socket the session creates (§06 of doc/architecture.md).
 	// nil leaves the sockets as they are.
 	Control func(network, address string, c syscall.RawConn) error
-	// LookupIP resolves the host names of resolvers. nil is the system resolver.
+	// LookupIP resolves the host names of resolvers; the system resolver is never asked.
+	// With nil a resolver must be given by its address.
 	LookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
 	// KeepAliveTimeout is how long the session lives without data from the server; 0 is
 	// upstream's 2 minutes. The server sends a keepalive every 10 s.
