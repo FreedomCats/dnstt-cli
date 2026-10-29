@@ -271,6 +271,79 @@ on the physical interface — refusal with a hint, as in csqtt-cli.
 
 ---
 
+## 05a. Leak protection and kill-switch
+
+What qwdtt-cli and csqtt-cli do, carried over as is, and what dnstt changes. Applies to
+`tun`; `socks` has no protection (below).
+
+**DNS protection — while the tunnel is up.** Port 53, UDP and TCP, is open only to the
+adapter's DNS address, loopback and dnstt-cli's own sockets; everything else on port 53 is
+rejected. Without it Windows would send queries to the resolvers of every adapter, and
+names of visited sites would reach the ISP.
+
+- Linux — nftables table `inet dnstt-cli` with the `owner` flag, chains for outgoing and
+  forwarded traffic (containers, VMs); own sockets pass by `SO_MARK`, not by user — under
+  `sudo` "root may do anything" would let every root program through.
+- Windows — WFP filters in a dynamic session; own process passes by app ID.
+- Both disappear with the process, even a killed one. If they cannot be set, `connect`
+  refuses before connecting.
+- Browser DoH goes to port 443 and is not touched, but it follows the routes into the
+  tunnel — it does not leak either.
+
+**IPv6 — always closed outward in `tun`.** The tunnel does not carry it (R7). Linux: the
+same table rejects IPv6 except loopback, own sockets, the local network (`fe80::/10`,
+`fc00::/7`, `ff00::/8`), ND, RA and DHCPv6. Windows: `::/1` and `8000::/1` lead into the
+adapter, and netstack rejects the packets; if IPv6 is off on the adapter, WFP closes it as
+on Linux. Apps fall back to IPv4.
+
+**Kill-switch — while the tunnel is not up.** On by default. From the start of `connect`
+until the first session, and during every reconnection, system traffic is closed. Allowed
+while closed:
+
+- dnstt-cli itself — it has to reach the resolvers;
+- loopback;
+- DHCP (IPv4 and IPv6), IPv6 neighbour discovery and router advertisements;
+- the local network: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`,
+  `fe80::/10`, `fc00::/7`, multicast and broadcast — router, printer and NAS stay
+  reachable.
+
+Port 53 is closed even in the local network: the router's resolver would pass queries to
+the ISP. Everything else is rejected: UDP at once, TCP by timeout. On Linux forwarded
+traffic is closed too. When the session is up, the kill-switch blocks nothing — only DNS
+protection and the IPv6 block work.
+
+Differences from qwdtt-cli and csqtt-cli:
+
+- **No exceptions mid-session.** There is no captcha, so the kill-switch is never lifted
+  for a browser window.
+- **Resolvers under a closed kill-switch.** The core's queries go through bound and marked
+  sockets (R4); resolver names come from pinned addresses or the bootstrap resolver over
+  the same sockets (R5), never from the closed system DNS.
+
+Output lines, as in the other two clients: "kill-switch: system traffic is blocked while
+the tunnel is down", "tunnel reconnecting — system traffic is blocked (kill-switch)",
+"tunnel up again — system traffic goes through it".
+
+**Turning it off.** For one run — `-no-kill-switch`; for good — `kill_switch = false` in the
+profile. Then between sessions the routes and DNS protection are removed and traffic goes
+past the tunnel, with lines saying so. `-allow-leak` (one run only, never in the profile)
+connects even if DNS protection or the kill-switch could not be set.
+
+**If dnstt-cli crashes or is killed.** The first Ctrl+C cleans up everything. After `kill
+-9` or a crash the adapter, routes, nftables table and WFP filters disappear with the
+process: the machine is not left without network, but it is not protected either — a
+permanent block surviving dnstt-cli is deliberately absent. What can remain is system DNS
+on Linux (a `resolvconf` entry or a rewritten `/etc/resolv.conf` with a backup); the next
+`connect` removes it and says so. On Windows a registry key with the old adapter's DNS
+remains; without the adapter it affects nothing.
+
+**`socks` has no protection.** Only what apps send to the proxy goes through the tunnel.
+Names go to the server only if the app passes them to the proxy (`socks5h` in curl, "proxy
+DNS" in browsers); otherwise DNS goes to the ISP. Browsers' WebRTC may reveal the real
+address over UDP. README says this plainly and points to `tun` for full protection.
+
+---
+
 ## 06. Tunnel bypass
 
 | # | Where | What | Binding |
@@ -433,6 +506,36 @@ links in csqtt-cli.
 
 ---
 
+## 10a. Interactive mode and output
+
+From csqtt-cli: the menu has no logic of its own, it calls the same code as the commands.
+
+- **Start.** `dnstt-cli` without arguments in a terminal opens the menu (on Windows — a
+  double click on the exe); `menu` opens it explicitly; `menu -connect <profile>` connects
+  at once with the same questions. Without a terminal, no arguments prints the command
+  list.
+- **No profile yet** — the wizard: paste a `slipnet://` link (hidden input: it holds the
+  exit password) or answer questions — profile name (Enter — `home`), tunnel domain, server
+  key, exit type, exit login and password (hidden, twice), resolvers (DoH presets offered
+  first, own ones possible), then the mode: all traffic (`tun`, Enter, where supported) or
+  only programs with the proxy (`socks`). End of input on any question cancels without
+  writing.
+- **Privileges.** `tun` without root: the menu re-runs one connection through `sudo` in the
+  same terminal on Linux, through UAC in a new window on Windows. No way to get them (no
+  `sudo`, a non-admin Windows account) — `socks` for this time.
+- **Menu items.** Connect; check resolvers (drops dead ones on request); edit resolvers;
+  new exit password; change domain or key; another profile; delete profile; `0` — exit.
+- **When resolvers run out mid-session** (none completes a handshake for a full round),
+  the menu offers to check and edit them and connects again.
+- **Signals.** Ctrl+C while connected returns to the menu, the second one does not wait for
+  open connections, in the menu it closes it; SIGTERM and SIGHUP remove the tunnel and close
+  the menu. A window opened by a double click does not close on an error: Enter does.
+- **Status line.** At the bottom of the terminal: state, uptime, current resolver, open
+  streams, received and sent, latency of the last handshake. Absent when output is
+  redirected.
+
+---
+
 ## 11. Licenses
 
 | Part | License | Where |
@@ -458,14 +561,14 @@ and `core/` from the mirror with P1, CI for Linux and Windows.
 ### E1. `socks` with reconnection — Linux and Windows
 
 Session API, supervisor, SOCKS5 exit with a password, local SOCKS5, resolver list with
-failover and `resolvers check`, P2–P5, profiles and secrets. Result: a browser goes through
+failover and `resolvers check`, P2–P5, profiles and secrets, the status line. Result: a browser goes through
 the server's `danted` with a login, and the session survives a server restart and a network
 change.
 
 ### E2. System VPN on Linux
 
 `tun` with netstack, DNS over TCP, UDP rejection, routes, system DNS, DNS protection,
-kill-switch, IPv6 blocking, `rp_filter`, network tracking, `sudo`.
+kill-switch and IPv6 blocking (§05a), `rp_filter`, network tracking, `sudo`.
 
 ### E3. System VPN on Windows
 
@@ -473,7 +576,7 @@ Wintun, WFP with one app ID, the rest as in csqtt-cli.
 
 ### E4. Interactive mode and releases
 
-Menu without arguments, profile wizard, `slipnet://` import, release archives with
+Menu, wizard and privilege elevation (§10a), `slipnet://` import, release archives with
 `SHA256SUMS.txt`.
 
 ### E5. SSH exit
