@@ -86,6 +86,9 @@ func TestFamilyWithoutRouteRefuses(t *testing.T) {
 		c.Close()
 		t.Fatal("IPv6 without a route connected")
 	}
+	if errors.Is(err, unix.EAFNOSUPPORT) {
+		t.Skip("the kernel has no IPv6")
+	}
 	if !errors.Is(err, unix.ENETUNREACH) {
 		t.Errorf("want ENETUNREACH: %v", err)
 	}
