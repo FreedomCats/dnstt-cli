@@ -171,11 +171,22 @@ func (g *Guard) apply(network, address string, c syscall.RawConn, set setter) er
 	}
 	index4, index6 := g.Interfaces()
 
+	// An IPv6 socket on the unspecified address may be dual-stack: Control gets "udp6" or
+	// "tcp6" both for those networks, which Go opens with IPV6_V6ONLY, and for a
+	// dual-stack "udp" or "tcp" socket. The option tells them apart; where it cannot be
+	// read, the socket is taken as dual-stack. In the core such a socket is a per-query
+	// UDP socket of UDP mode (P3): it is opened on ":0", "udp6" for an IPv6 resolver, so
+	// Control does not see the destination. The other sockets of the core are dials, and
+	// Control gets the destination address.
+	if v4 && v6 {
+		var only bool
+		if err := c.Control(func(fd uintptr) { only, _ = v6Only(fd) }); err == nil && only {
+			v4 = false
+		}
+	}
+
 	// A dual-stack socket is bound to what is known: on a machine without IPv6 that is
-	// IPv4 only. In the core such a socket is a per-query UDP socket of UDP mode: it is
-	// opened on ":0" (udp6 for an IPv6 resolver), so Control does not see the
-	// destination. The other sockets of the core are dials, and Control gets the
-	// destination address.
+	// IPv4 only.
 	if v4 && v6 {
 		if index4 == 0 && index6 == 0 {
 			return noInterface("IPv4 and IPv6", network, address)

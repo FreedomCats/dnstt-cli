@@ -1,17 +1,21 @@
 package netguard
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"syscall"
 	"testing"
 )
 
-// fakeConn is a syscall.RawConn whose Control just calls the function.
+// fakeConn is a syscall.RawConn whose Control just calls the function, with a descriptor
+// that is not a socket: IPV6_V6ONLY cannot be read, and an IPv6 socket on the unspecified
+// address is taken as dual-stack.
 type fakeConn struct{}
 
-func (fakeConn) Control(f func(fd uintptr)) error  { f(42); return nil }
+func (fakeConn) Control(f func(fd uintptr)) error  { f(1 << 30); return nil }
 func (fakeConn) Read(func(fd uintptr) bool) error  { return errors.New("not needed") }
 func (fakeConn) Write(func(fd uintptr) bool) error { return errors.New("not needed") }
 
@@ -134,5 +138,46 @@ func TestLogf(t *testing.T) {
 	_ = g.apply("tcp6", "[2a00::1]:443", fakeConn{}, r.set)
 	if len(lines) != 1 || lines[0] != "[NETGUARD] tcp4 203.0.113.80:443 → interface 3" {
 		t.Fatalf("lines %q", lines)
+	}
+}
+
+// A real "udp6" socket on ":0" is IPv6-only (Go sets IPV6_V6ONLY) and is bound for IPv6
+// only; a "udp" socket on ":0" is dual-stack and is bound as one. Control gets "udp6" and
+// the unspecified address for both. Skipped where the kernel has no IPv6.
+func TestApplyReadsV6Only(t *testing.T) {
+	for _, tc := range []struct {
+		network, want, wantSingle string
+	}{
+		{"udp6", "6=15", ""},
+		{"udp", "4=12,6=15", "4=12"},
+	} {
+		t.Run(tc.network, func(t *testing.T) {
+			var g Guard
+			g.SetInterfaces(12, 15)
+			var r recorder
+			var seen string
+			lc := net.ListenConfig{Control: func(network, address string, c syscall.RawConn) error {
+				seen = network + " " + address
+				return g.apply(network, address, c, r.set)
+			}}
+			conn, err := lc.ListenPacket(context.Background(), tc.network, ":0")
+			if err != nil {
+				t.Skipf("no IPv6 socket here: %v", err)
+			}
+			conn.Close()
+			if seen == "udp4 :0" || seen == "udp4 0.0.0.0:0" {
+				t.Skip("no IPv6 here: the socket is IPv4")
+			}
+			if seen != "udp6 :0" && seen != "udp6 [::]:0" {
+				t.Fatalf("Control got %q", seen)
+			}
+			want := tc.want
+			if !bindPerFamily && tc.wantSingle != "" {
+				want = tc.wantSingle
+			}
+			if got := strings.Join(r.calls, ","); got != want {
+				t.Fatalf("calls %q, want %q", got, want)
+			}
+		})
 	}
 }

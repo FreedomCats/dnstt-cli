@@ -167,21 +167,16 @@ func (s *sockets) dial(ctx context.Context, network, addr string) (net.Conn, err
 	return nil, errors.Join(errs...)
 }
 
-// listenUDP opens a UDP socket with Control for queries to addr.
+// listenUDP opens a UDP socket with Control for a query to addr, of addr's family. The
+// socket is the caller's to close: udpTransport closes it after the answer, and every
+// socket still open when it is closed.
 func (s *sockets) listenUDP(ctx context.Context, addr netip.AddrPort) (net.PacketConn, error) {
 	network := "udp4"
 	if addr.Addr().Is6() {
 		network = "udp6"
 	}
 	lc := &net.ListenConfig{Control: s.cfg.Control}
-	conn, err := lc.ListenPacket(ctx, network, ":0")
-	if err != nil {
-		return nil, err
-	}
-	if err := s.track(conn); err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return lc.ListenPacket(ctx, network, ":0")
 }
 
 // trackedConn leaves the session's set of sockets when it is closed.
@@ -287,8 +282,8 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 			return nil, nil, err
 		}
 		addr := netip.AddrPortFrom(ips[0], uint16(port))
-		pconn, err := s.listenUDP(ctx, addr)
-		if err != nil {
+		pconn := newUDPTransport(s, addr)
+		if err := s.track(pconn); err != nil {
 			return nil, nil, err
 		}
 		return net.UDPAddrFromAddrPort(addr), pconn, nil

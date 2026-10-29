@@ -146,9 +146,9 @@ func TestSessionStreams(t *testing.T) {
 		}
 	}
 
-	// A UDP session has one socket.
-	if n := controls.Load(); n != 1 {
-		t.Errorf("Control called %d times, want 1", n)
+	// A UDP session opens a socket per query (P3), each through Control.
+	if n := controls.Load(); n < 10 {
+		t.Errorf("Control called %d times, want one per query", n)
 	}
 	st := s.Stats()
 	if st.BytesSent < 40000 || st.BytesReceived < 40000 {

@@ -17,6 +17,9 @@ func (g *Guard) setter() setter {
 	return func(uintptr, bool, uint32) error { return nil }
 }
 
+// v6Only takes every socket as dual-stack here: Control does nothing anyway.
+func v6Only(uintptr) (bool, error) { return false, nil }
+
 // choose has nothing to choose here.
 func choose(uint64) (Choice, error) { return Choice{}, nil }
 

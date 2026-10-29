@@ -82,3 +82,9 @@ func choose(exclude uint64) (Choice, error) {
 func subscribe(notify func(id uint64)) (func(), error) {
 	return linuxsys.WatchNetwork(notify)
 }
+
+// v6Only reads IPV6_V6ONLY of the socket.
+func v6Only(fd uintptr) (bool, error) {
+	v, err := unix.GetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
+	return v == 1, err
+}

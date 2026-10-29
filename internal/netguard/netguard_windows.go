@@ -77,3 +77,9 @@ func bindSocketToInterface6(handle windows.Handle, interfaceIndex uint32) error 
 	const IPV6_UNICAST_IF = 31
 	return windows.SetsockoptInt(handle, windows.IPPROTO_IPV6, IPV6_UNICAST_IF, int(interfaceIndex))
 }
+
+// v6Only reads IPV6_V6ONLY of the socket.
+func v6Only(fd uintptr) (bool, error) {
+	v, err := windows.GetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, windows.IPV6_V6ONLY)
+	return v == 1, err
+}
