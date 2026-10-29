@@ -369,6 +369,11 @@ func run(root, upstream string, check bool) (int, error) {
 			}
 			if !bytes.Equal(normalize(current), plan[name]) {
 				problems = append(problems, "differs: "+name)
+				if name == "CORE_VERSION" {
+					// A short file of fields: its lines say what changed, the name alone
+					// does not.
+					problems = append(problems, lineDiff(string(normalize(current)), string(plan[name]))...)
+				}
 			}
 		}
 		for _, rel := range extra {
@@ -434,4 +439,21 @@ func corePath(upstreamPath string) string {
 		}
 	}
 	return upstreamPath
+}
+
+// lineDiff lists the lines of have missing from want and of want missing from have.
+func lineDiff(have, want string) []string {
+	var out []string
+	haveLines, wantLines := strings.Split(have, "\n"), strings.Split(want, "\n")
+	for _, l := range haveLines {
+		if !slices.Contains(wantLines, l) {
+			out = append(out, "    in core/: "+l)
+		}
+	}
+	for _, l := range wantLines {
+		if !slices.Contains(haveLines, l) {
+			out = append(out, "    expected: "+l)
+		}
+	}
+	return out
 }
