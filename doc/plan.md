@@ -25,9 +25,9 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 - Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
   E0 (results below, under "E0. Foundation").
-- E1: S1 (core patches P2–P5) and S2 (exit) done, results under each. Next: S3
-  (resolvers); S0 (the user's test server) when the user has one: the server's values are
-  asked for in chat and kept only in `doc/local/plan-e1.md`.
+- E1: S1 (core patches P2–P5), S2 (exit) and S3 (resolvers) done, results under each.
+  Next: S4 (supervisor); S0 (the user's test server) when the user has one: the server's
+  values are asked for in chat and kept only in `doc/local/plan-e1.md`.
 - CI is green on `main` (`linux`: test, netns, core; `windows`: test, core).
 - A new session first sets up the workspace as in F0: the mirror as `../dnstt` and
   csqtt-cli as `../csqtt-cli`; `go run ./scripts/vendorcore -check` and `go test ./...`
@@ -297,7 +297,28 @@ other failures are retries. `exit.Dialer` over a function that opens a stream.
 password, refused `CONNECT`) pass, and a test through the in-process dnstt server reaches
 an echo server behind a SOCKS5 server.
 
-### S3. Resolvers — `internal/resolvers`
+### S3. Resolvers — `internal/resolvers` — done
+
+**Result.** `Parse` reads `doh:URL`, `dot:host[:port]` (853 by default), `udp:host[:port]`
+(53), an IPv6 host bare or in brackets, and `@address[,address…]` that pins the addresses
+of a host name (an address is not pinned); `tcp:` is refused until P6. `String` writes the
+entry back with the port, and `Parse` reads it to the same resolver. Eight presets,
+`doh-`/`dot-` × cloudflare, google, quad9, adguard, each with its two IPv4 addresses
+pinned; `Expand` takes entries and preset names, drops repeats and names the presets when
+an unknown one is given. `Resolver.LookupIP(fallback)` is the session's `LookupIP`: the
+pins for its own host, the fallback for anything else. The bootstrap resolver
+(`Bootstrap`, from the tunnel DNS resolver of csqtt-cli) asks A, then AAAA if there is no
+A, over its own UDP sockets through `Control`, TCP after a truncated answer; a silent server
+is passed over after 2 s, two rounds; NXDOMAIN and "no addresses" are final; answers are
+kept up to their TTL, at most 5 min, `Forget` drops them. Its servers: the profile's UDP
+resolvers given by address, then 1.1.1.1, 8.8.8.8 and 9.9.9.9 (`BootstrapServers`). Health
+(`Pool`): three failures in a row — a failed handshake or a session that died by itself
+within a minute — put a resolver aside for 1 min, then 2, 4… up to 16; a session that
+lived a minute clears its record; `Next` goes down the list past the resolvers aside, and
+when all are aside, takes the one that comes back first; `Reset` after a network change.
+Tests against a DNS server in the test (UDP and TCP, truncation, an answer with another
+ID, a silent server, the cache) and a session of the core through a resolver given by
+name, pinned and through the bootstrap resolver. Not checked yet: the presets live (S8).
 
 The list of a profile: `doh:URL`, `dot:host:port`, `udp:host:port`, `@address` pins;
 presets with built-in addresses; the bootstrap resolver for host names over sockets with
@@ -345,7 +366,7 @@ server in a test.
 
 A browser through `socks` to the server's `danted` with a login, over DoH, DoT and UDP; the
 session survives a server restart and a network change; `resolvers check` on a list with a
-dead resolver. Whether `danted` takes the SOCKS5 greeting, login and request in one write
+dead resolver; every preset completes a handshake. Whether `danted` takes the SOCKS5 greeting, login and request in one write
 (two round trips less per connection, R3). On Linux and Windows. Results without
 environment in this file, the course of the runs in `doc/local/plan-e1.md`.
 

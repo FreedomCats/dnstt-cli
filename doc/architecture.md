@@ -124,9 +124,18 @@ built-in presets; all four are supported. The list is tried in order; a resolver
 sessions repeatedly is put aside for a while, and the session moves to the next one.
 
 A host name in a resolver is resolved without the system: a `@address` suffix pins the
-address (`doh:https://doh.example/dns-query@192.0.2.1`, like `curl --resolve`), and
-without it the name is resolved through a bootstrap resolver over bound sockets. Built-in
-presets carry addresses, so they work under a closed kill-switch.
+address (`doh:https://doh.example/dns-query@192.0.2.1`, like `curl --resolve`; several
+addresses go comma-separated and are tried in turn; an `@` inside the URL itself is
+written `%40`), and without it the name is resolved through a bootstrap resolver over
+bound sockets. Built-in presets carry addresses, so they work under a closed kill-switch.
+The bootstrap resolver asks plain DNS of the profile's UDP resolvers given by address,
+then of public resolvers by address (1.1.1.1, 8.8.8.8, 9.9.9.9); the name of a DoH or DoT
+server goes in clear anyway, in the TLS SNI.
+
+Health, per resolver: three failures in a row (a failed handshake, a session that died
+by itself within a minute) put it aside for 1 min, doubling up to 16 min; a session that
+lived a minute clears the record; a network change clears all. When every resolver is
+aside, the one that comes back first is dialed: the tunnel never stops trying.
 
 `dnstt-cli resolvers check [profile]` performs a real Noise handshake through every
 resolver of the profile and prints the time or the reason; exit code 1 if none passes.
