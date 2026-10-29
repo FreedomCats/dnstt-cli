@@ -1,0 +1,10 @@
+# Version of the dnstt core carried into core/.
+# Written by go run ./scripts/vendorcore — do not edit by hand.
+
+upstream = https://github.com/FreedomCats/dnstt
+commit   = 0c5c52a57d899c05428c116898941761a2ed83c2
+date     = 2026-05-01T01:13:58+00:00
+version  = v1.20260501.0
+files    = 21
+rules    = 0
+added    = 0
