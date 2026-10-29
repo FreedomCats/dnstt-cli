@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -26,6 +25,9 @@ const dialTimeout = 30 * time.Second
 //
 // https://tools.ietf.org/html/rfc7858
 type TLSPacketConn struct {
+	// logf receives the messages of the transport (dnstt-cli).
+	logf func(format string, args ...any)
+
 	// QueuePacketConn is the direct receiver of ReadFrom and WriteTo calls.
 	// recvLoop and sendLoop take the messages out of the receive and send
 	// queues and actually put them on the network.
@@ -34,9 +36,9 @@ type TLSPacketConn struct {
 
 // NewTLSPacketConn creates a new TLSPacketConn configured to use the TLS
 // server at addr as a DNS over TLS resolver. It maintains a TLS connection to
-// the resolver, reconnecting as necessary. It closes the connection if any
-// reconnection attempt fails.
-func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error)) (*TLSPacketConn, error) {
+// the resolver, reconnecting as necessary. A failed reconnection is retried with
+// a backoff until the TLSPacketConn is closed (dnstt-cli, P2).
+func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {
 	dial := func() (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
@@ -52,6 +54,7 @@ func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, netw
 	}
 	c := &TLSPacketConn{
 		QueuePacketConn: turbotunnel.NewQueuePacketConn(turbotunnel.DummyAddr{}, 0),
+		logf:            logf,
 	}
 	go func() {
 		defer c.Close()
@@ -61,14 +64,14 @@ func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, netw
 			go func() {
 				err := c.recvLoop(conn)
 				if err != nil {
-					log.Printf("recvLoop: %v", err)
+					c.logf("recvLoop: %v", err)
 				}
 				wg.Done()
 			}()
 			go func() {
 				err := c.sendLoop(conn)
 				if err != nil {
-					log.Printf("sendLoop: %v", err)
+					c.logf("sendLoop: %v", err)
 				}
 				wg.Done()
 			}()
@@ -81,9 +84,8 @@ func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, netw
 			}
 
 			// Whenever the TLS connection dies, redial a new one.
-			conn, err = dial()
+			conn, err = c.redial(dial)
 			if err != nil {
-				log.Printf("dial tls: %v", err)
 				break
 			}
 		}

@@ -1,5 +1,7 @@
 package main
 
+import "slices"
+
 // =============================== patches ========================================
 // Everything that changes in the upstream code is described here and only here (R1 in
 // doc/architecture.md, patches P1–P7 — §07).
@@ -79,7 +81,9 @@ func to(s string) *string { return &s }
 
 // rules are the patches. The package and import conversion is done by convertGo, not by
 // rules.
-var rules = []rule{
+var rules = slices.Concat(p1Rules, p2Rules, logfRules)
+
+var p1Rules = []rule{
 	// P1: every socket of the core comes from the dialer of the session (§06). uTLS
 	// connections take the dial function from their caller instead of building
 	// &net.Dialer{} themselves; dialFunc is declared in _files/client/transport.go.
@@ -171,4 +175,72 @@ var rules = []rule{
 		Pattern:     `(?m)^(\t\t\t)conn\.Close\(\)$`,
 		InsertAfter: "select {\n\t\t\tcase <-c.QueuePacketConn.Closed():\n\t\t\t\treturn\n\t\t\tdefault:\n\t\t\t}",
 	},
+}
+
+// P2: DoT redials with a backoff instead of giving up after one failed redial (§07).
+// TLSPacketConn.redial is declared in _files/client/redial.go.
+var p2Rules = []rule{
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern: `(?m)^(\t\t\t)conn, err = dial\(\)\n\t\t\tif err != nil \{\n\t\t\t\tlog\.Printf\("dial tls: %v", err\)\n\t\t\t\tbreak\n\t\t\t\}$`,
+		Replace: to("${1}conn, err = c.redial(dial)\n${1}if err != nil {\n${1}\tbreak\n${1}}"),
+	},
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern: `(?m)^(// )the resolver, reconnecting as necessary\. It closes the connection if any\n// reconnection attempt fails\.$`,
+		Replace: to("${1}the resolver, reconnecting as necessary. A failed reconnection is retried with\n${1}a backoff until the TLSPacketConn is closed (dnstt-cli, P2)."),
+	},
+}
+
+// logfRules: the transports log through the logf their constructor is given, not through
+// the log package of the process, so that their messages reach Config.Logf of the session
+// (dnstt-cli prints them with -v). Upstream main gives them log.Printf.
+var logfRules = slices.Concat(
+	transportLogf("client/dns.go", 4,
+		`func NewDNSPacketConn\(transport net\.PacketConn, addr net\.Addr, domain dns\.Name\)`,
+		"func NewDNSPacketConn(transport net.PacketConn, addr net.Addr, domain dns.Name, logf func(format string, args ...any))",
+		`(?m)^(\t\t)pollChan:        make\(chan struct\{\}, pollLimit\),$`),
+	transportLogf("client/http.go", 5,
+		`func NewHTTPPacketConn\(rt http\.RoundTripper, urlString string, numSenders int\)`,
+		"func NewHTTPPacketConn(rt http.RoundTripper, urlString string, numSenders int, logf func(format string, args ...any))",
+		`(?m)^(\t\t)urlString:       urlString,$`),
+	// In tls.go the log call of the failed redial is gone with P2.
+	transportLogf("client/tls.go", 2,
+		`func NewTLSPacketConn\(addr string, dialTLSContext func\(ctx context\.Context, network, addr string\) \(net\.Conn, error\)\)`,
+		"func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any))",
+		`(?m)^(\t\t)QueuePacketConn: turbotunnel\.NewQueuePacketConn\(turbotunnel\.DummyAddr\{\}, 0\),$`),
+	[]rule{
+		{
+			File: "client/main.go", Count: 1,
+			Pattern: `NewHTTPPacketConn\(rt, dohURL, 32\)`,
+			Replace: to("NewHTTPPacketConn(rt, dohURL, 32, log.Printf)"),
+		},
+		{
+			File: "client/main.go", Count: 1,
+			Pattern: `NewTLSPacketConn\(dotAddr, dialTLSContext\)`,
+			Replace: to("NewTLSPacketConn(dotAddr, dialTLSContext, log.Printf)"),
+		},
+		{
+			File: "client/main.go", Count: 1,
+			Pattern: `NewDNSPacketConn\(pconn, remoteAddr, domain\)`,
+			Replace: to("NewDNSPacketConn(pconn, remoteAddr, domain, log.Printf)"),
+		},
+	},
+)
+
+// transportLogf gives the transport of file a logf field: the constructor (signature
+// from → sig) takes it, the struct literal after the line literal sets it, and the calls
+// log.Printf of the file become c.logf. The import of log goes.
+func transportLogf(file string, calls int, from, sig, literal string) []rule {
+	return []rule{
+		{
+			File: file, Count: 1,
+			Pattern:      `(?m)^(\t)// QueuePacketConn is the direct receiver of ReadFrom and WriteTo calls\.$`,
+			InsertBefore: "// logf receives the messages of the transport (dnstt-cli).\n\tlogf func(format string, args ...any)\n",
+		},
+		{File: file, Count: 1, Pattern: `()` + from, Replace: to(sig)},
+		{File: file, Count: 1, Pattern: literal, InsertAfter: "logf:            logf,"},
+		{File: file, Count: calls, Pattern: `()\blog\.Printf\(`, Replace: to("c.logf(")},
+		{File: file, Count: 1, Pattern: `(?m)^()\t"log"\n`, Replace: to("")},
+	}
 }

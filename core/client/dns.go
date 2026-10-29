@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
@@ -62,6 +61,9 @@ type DNSPacketConn struct {
 	// Sending on pollChan permits sendLoop to send an empty polling query.
 	// sendLoop also does its own polling according to a time schedule.
 	pollChan chan struct{}
+	// logf receives the messages of the transport (dnstt-cli).
+	logf func(format string, args ...any)
+
 	// QueuePacketConn is the direct receiver of ReadFrom and WriteTo calls.
 	// recvLoop and sendLoop take the messages out of the receive and send
 	// queues and actually put them on the network.
@@ -72,25 +74,26 @@ type DNSPacketConn struct {
 // and ReadFrom methods, handles the actual sending and receiving the DNS
 // messages encoded by DNSPacketConn. addr is the address to be passed to
 // transport.WriteTo whenever a message needs to be sent.
-func NewDNSPacketConn(transport net.PacketConn, addr net.Addr, domain dns.Name) *DNSPacketConn {
+func NewDNSPacketConn(transport net.PacketConn, addr net.Addr, domain dns.Name, logf func(format string, args ...any)) *DNSPacketConn {
 	// Generate a new random ClientID.
 	clientID := turbotunnel.NewClientID()
 	c := &DNSPacketConn{
 		clientID:        clientID,
 		domain:          domain,
 		pollChan:        make(chan struct{}, pollLimit),
+		logf:            logf,
 		QueuePacketConn: turbotunnel.NewQueuePacketConn(clientID, 0),
 	}
 	go func() {
 		err := c.recvLoop(transport)
 		if err != nil {
-			log.Printf("recvLoop: %v", err)
+			c.logf("recvLoop: %v", err)
 		}
 	}()
 	go func() {
 		err := c.sendLoop(transport, addr)
 		if err != nil {
-			log.Printf("sendLoop: %v", err)
+			c.logf("sendLoop: %v", err)
 		}
 	}()
 	return c
@@ -193,7 +196,7 @@ func (c *DNSPacketConn) recvLoop(transport net.PacketConn) error {
 		// Got a response. Try to parse it as a DNS message.
 		resp, err := dns.MessageFromWireFormat(buf[:n])
 		if err != nil {
-			log.Printf("MessageFromWireFormat: %v", err)
+			c.logf("MessageFromWireFormat: %v", err)
 			continue
 		}
 
@@ -398,7 +401,7 @@ func (c *DNSPacketConn) sendLoop(transport net.PacketConn, addr net.Addr) error 
 		// trying to send more than one packet per query.
 		err := c.send(transport, p, addr)
 		if err != nil {
-			log.Printf("send: %v", err)
+			c.logf("send: %v", err)
 			continue
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -47,6 +46,9 @@ type HTTPPacketConn struct {
 	notBefore     time.Time
 	notBeforeLock sync.RWMutex
 
+	// logf receives the messages of the transport (dnstt-cli).
+	logf func(format string, args ...any)
+
 	// QueuePacketConn is the direct receiver of ReadFrom and WriteTo calls.
 	// sendLoop, via send, removes messages from the outgoing queue that
 	// were placed there by WriteTo, and inserts messages into the incoming
@@ -59,13 +61,14 @@ type HTTPPacketConn struct {
 // that will be used to make requests. urlString should include any necessary
 // path components; e.g., "/dns-query". numSenders is the number of concurrent
 // sender-receiver goroutines to run.
-func NewHTTPPacketConn(rt http.RoundTripper, urlString string, numSenders int) (*HTTPPacketConn, error) {
+func NewHTTPPacketConn(rt http.RoundTripper, urlString string, numSenders int, logf func(format string, args ...any)) (*HTTPPacketConn, error) {
 	c := &HTTPPacketConn{
 		client: &http.Client{
 			Transport: rt,
 			Timeout:   1 * time.Minute,
 		},
 		urlString:       urlString,
+		logf:            logf,
 		QueuePacketConn: turbotunnel.NewQueuePacketConn(turbotunnel.DummyAddr{}, 0),
 	}
 	for i := 0; i < numSenders; i++ {
@@ -112,7 +115,7 @@ func (c *HTTPPacketConn) send(p []byte) error {
 			var err error
 			retryAfter, err = parseRetryAfter(value, now)
 			if err != nil {
-				log.Printf("cannot parse Retry-After value %+q", value)
+				c.logf("cannot parse Retry-After value %+q", value)
 			}
 		}
 		if retryAfter.IsZero() {
@@ -120,15 +123,15 @@ func (c *HTTPPacketConn) send(p []byte) error {
 			retryAfter = now.Add(defaultRetryAfter)
 		}
 		if retryAfter.Before(now) {
-			log.Printf("got %+q, but Retry-After is %v in the past",
+			c.logf("got %+q, but Retry-After is %v in the past",
 				resp.Status, now.Sub(retryAfter))
 		} else {
 			c.notBeforeLock.Lock()
 			if retryAfter.Before(c.notBefore) {
-				log.Printf("got %+q, but Retry-After is %v earlier than already received Retry-After",
+				c.logf("got %+q, but Retry-After is %v earlier than already received Retry-After",
 					resp.Status, c.notBefore.Sub(retryAfter))
 			} else {
-				log.Printf("got %+q; ceasing sending for %v",
+				c.logf("got %+q; ceasing sending for %v",
 					resp.Status, retryAfter.Sub(now))
 				c.notBefore = retryAfter
 			}
@@ -155,7 +158,7 @@ func (c *HTTPPacketConn) sendLoop() {
 
 		err := c.send(p)
 		if err != nil {
-			log.Printf("sendLoop: %v", err)
+			c.logf("sendLoop: %v", err)
 		}
 	}
 }

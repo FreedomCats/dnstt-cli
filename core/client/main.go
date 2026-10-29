@@ -361,7 +361,7 @@ Known TLS fingerprints for -utls are:
 			} else {
 				rt = NewUTLSRoundTripper(nil, utlsClientHelloID, (&net.Dialer{}).DialContext)
 			}
-			pconn, err := NewHTTPPacketConn(rt, dohURL, 32)
+			pconn, err := NewHTTPPacketConn(rt, dohURL, 32, log.Printf)
 			return addr, pconn, err
 		}},
 		// -dot
@@ -375,7 +375,7 @@ Known TLS fingerprints for -utls are:
 					return utlsDialContext(ctx, network, addr, nil, utlsClientHelloID, (&net.Dialer{}).DialContext)
 				}
 			}
-			pconn, err := NewTLSPacketConn(dotAddr, dialTLSContext)
+			pconn, err := NewTLSPacketConn(dotAddr, dialTLSContext, log.Printf)
 			return addr, pconn, err
 		}},
 		// -udp
@@ -407,7 +407,7 @@ Known TLS fingerprints for -utls are:
 		os.Exit(1)
 	}
 
-	pconn = NewDNSPacketConn(pconn, remoteAddr, domain)
+	pconn = NewDNSPacketConn(pconn, remoteAddr, domain, log.Printf)
 	err = run(pubkey, domain, localAddr, remoteAddr, pconn)
 	if err != nil {
 		log.Fatal(err)

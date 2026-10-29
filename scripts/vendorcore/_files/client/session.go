@@ -44,8 +44,8 @@ type Config struct {
 	// KeepAliveTimeout is how long the session lives without data from the server; 0 is
 	// upstream's 2 minutes. The server sends a keepalive every 10 s.
 	KeepAliveTimeout time.Duration
-	// Logf receives the session's own messages. nil discards them. The upstream code
-	// logs through the log package.
+	// Logf receives the messages of the session and of its transports. nil discards
+	// them.
 	Logf func(format string, args ...any)
 }
 
@@ -96,6 +96,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 	logf := cfg.Logf
 	if logf == nil {
 		logf = func(string, ...any) {}
+		cfg.Logf = logf
 	}
 
 	mtu := dnsNameCapacity(cfg.Domain) - 8 - 1 - numPadding - 1 // clientid + padding length prefix + padding + data length prefix
@@ -125,7 +126,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 	if err != nil {
 		return fail(fmt.Errorf("resolver %s: %w", cfg.Resolver, err))
 	}
-	s.dnsConn = NewDNSPacketConn(transport, addr, cfg.Domain)
+	s.dnsConn = NewDNSPacketConn(transport, addr, cfg.Domain, logf)
 
 	// KCP, as upstream run sets it up.
 	s.kcpConn, err = kcp.NewConn2(addr, nil, 0, 0, s.dnsConn)

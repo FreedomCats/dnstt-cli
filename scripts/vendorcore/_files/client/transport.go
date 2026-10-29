@@ -218,7 +218,7 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 		} else {
 			rt = NewUTLSRoundTripper(nil, id, s.dial)
 		}
-		pconn, err := NewHTTPPacketConn(rt, r.Address, numHTTPSenders)
+		pconn, err := NewHTTPPacketConn(rt, r.Address, numHTTPSenders, cfg.Logf)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -249,7 +249,7 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 		}
 		// NewTLSPacketConn dials with its own context: the session's end still cancels
 		// the dial through sockets.dial.
-		pconn, err := NewTLSPacketConn(r.Address, dialTLS)
+		pconn, err := NewTLSPacketConn(r.Address, dialTLS, cfg.Logf)
 		if err != nil {
 			return nil, nil, err
 		}
