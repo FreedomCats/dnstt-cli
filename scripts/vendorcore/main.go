@@ -47,7 +47,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/FreedomCats/dnstt-cli/scripts/internal/script"
 )
@@ -100,10 +102,17 @@ func getUpstreamVersion(dir string) (upstreamVersion, error) {
 	if err != nil {
 		return upstreamVersion{}, err
 	}
-	date, err := git("log", "-1", "--format=%cI")
+	// The commit time as a number, formatted here: git prints %cI differently across
+	// versions (+00:00 or Z), and CORE_VERSION must not depend on the git of the machine.
+	stamp, err := git("log", "-1", "--format=%ct")
 	if err != nil {
 		return upstreamVersion{}, err
 	}
+	seconds, err := strconv.ParseInt(stamp, 10, 64)
+	if err != nil {
+		return upstreamVersion{}, fmt.Errorf("commit time %q: %w", stamp, err)
+	}
+	date := time.Unix(seconds, 0).UTC().Format(time.RFC3339)
 	paths := []string{"status", "--porcelain", "--", changelog}
 	for _, d := range vendoredDirs {
 		paths = append(paths, d.Upstream)
