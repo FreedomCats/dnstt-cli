@@ -6,7 +6,7 @@
 //	go run ./scripts/vendorcore -check
 //
 // The only way to update the core (R1 in doc/architecture.md). Our patches live as rules
-// in rules.go and as files in scripts/vendorcore/files, so an update comes down to running
+// in rules.go and as files in scripts/vendorcore/_files, so an update comes down to running
 // this command and reviewing the diff.
 //
 // What it does:
@@ -17,10 +17,12 @@
 //     core/ (dnstt-client is package main upstream, client here), and the upstream module
 //     path in imports becomes the path of core/ in this module.
 //  3. Applies the rules of rules.go.
-//  4. Adds our files from scripts/vendorcore/files (addedDir).
-//  5. Writes core/CORE_VERSION: the upstream commit and its date, the version from the
+//  4. Adds our files from scripts/vendorcore/_files (addedDir).
+//  5. Checks the places where the core creates sockets against the list of hooked ones
+//     (sockets.go): a new socket is an error.
+//  6. Writes core/CORE_VERSION: the upstream commit and its date, the version from the
 //     first heading of CHANGELOG, numbers of files, rules and added files.
-//  6. Removes from core/ everything that is neither upstream nor in addedDir: core/
+//  7. Removes from core/ everything that is neither upstream nor in addedDir: core/
 //     belongs to the command entirely, nothing is put there by hand.
 //
 // Text files are written in UTF-8 with LF, as they are in the upstream git: a clone on
@@ -311,6 +313,11 @@ func run(root, upstream string, check bool) (int, error) {
 			return 0, err
 		}
 		plan[rel] = normalize(raw)
+	}
+
+	// The socket guard: a new socket in the core fails both the transfer and -check.
+	if err := checkSockets(plan); err != nil {
+		return 0, err
 	}
 
 	header := []string{

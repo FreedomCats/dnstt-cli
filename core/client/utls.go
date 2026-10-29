@@ -64,7 +64,7 @@ func utlsLookup(label string) *utls.ClientHelloID {
 // utlsDialContext connects to the given network address and initiates a TLS
 // handshake with the provided ClientHelloID, and returns the resulting TLS
 // connection.
-func utlsDialContext(ctx context.Context, network, addr string, config *utls.Config, id *utls.ClientHelloID) (*utls.UConn, error) {
+func utlsDialContext(ctx context.Context, network, addr string, config *utls.Config, id *utls.ClientHelloID, dial dialFunc) (*utls.UConn, error) {
 	// Set the SNI from addr, if not already set.
 	if config == nil {
 		config = &utls.Config{}
@@ -77,8 +77,7 @@ func utlsDialContext(ctx context.Context, network, addr string, config *utls.Con
 		}
 		config.ServerName = host
 	}
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, network, addr)
+	conn, err := dial(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -140,14 +139,16 @@ type utlsRoundTripper struct {
 	config        *utls.Config
 	innerLock     sync.Mutex
 	inner         http.RoundTripper
+	dial          dialFunc
 }
 
 // NewUTLSRoundTripper creates a utlsRoundTripper with the given TLS
 // configuration and ClientHelloID.
-func NewUTLSRoundTripper(config *utls.Config, id *utls.ClientHelloID) *utlsRoundTripper {
+func NewUTLSRoundTripper(config *utls.Config, id *utls.ClientHelloID, dial dialFunc) *utlsRoundTripper {
 	return &utlsRoundTripper{
 		clientHelloID: id,
 		config:        config,
+		dial:          dial,
 		// inner will be set in the first call to RoundTrip.
 	}
 }
@@ -167,7 +168,7 @@ func (rt *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if rt.inner == nil {
 		// On the first call, make an http.Transport or http2.Transport
 		// as appropriate.
-		rt.inner, err = makeRoundTripper(req, rt.config, rt.clientHelloID)
+		rt.inner, err = makeRoundTripper(req, rt.config, rt.clientHelloID, rt.dial)
 	}
 	rt.innerLock.Unlock()
 	if err != nil {
@@ -183,13 +184,13 @@ func (rt *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 // http2.Transport, depending on the negotated ALPN. The Transport is set up to
 // make future TLS connections using the same TLS configuration and
 // ClientHelloID.
-func makeRoundTripper(req *http.Request, config *utls.Config, id *utls.ClientHelloID) (http.RoundTripper, error) {
+func makeRoundTripper(req *http.Request, config *utls.Config, id *utls.ClientHelloID, dial dialFunc) (http.RoundTripper, error) {
 	addr, err := addrForDial(req.URL)
 	if err != nil {
 		return nil, err
 	}
 
-	bootstrapConn, err := utlsDialContext(req.Context(), "tcp", addr, config, id)
+	bootstrapConn, err := utlsDialContext(req.Context(), "tcp", addr, config, id, dial)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +214,7 @@ func makeRoundTripper(req *http.Request, config *utls.Config, id *utls.ClientHel
 		}
 
 		// Later dials make a new connection.
-		uconn, err := utlsDialContext(ctx, "tcp", addr, config, id)
+		uconn, err := utlsDialContext(ctx, "tcp", addr, config, id, dial)
 		if err != nil {
 			return nil, err
 		}
@@ -245,6 +246,8 @@ func makeRoundTripper(req *http.Request, config *utls.Config, id *utls.ClientHel
 		// IdleConnTimeout, before overriding DialTLSContext.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.DialTLSContext = dialTLSContext
+		tr.DialContext = dial
+		tr.Proxy = nil
 		return tr, nil
 	}
 }

@@ -127,8 +127,11 @@ func read(t *testing.T, path string) string {
 
 // fakeUpstream is an upstream laid out like the real one: files with CRLF, as a clone on
 // Windows gives them, the client as package main, files that stay upstream.
+//
+// It has no sockets: the list of socket places is empty for the duration of the test.
 func fakeUpstream(t *testing.T) string {
 	t.Helper()
+	withSockets(t)
 	up := t.TempDir()
 	write(t, filepath.Join(up, "COPYING"), "CC0\r\n")
 	write(t, filepath.Join(up, "CHANGELOG"), "## v9.9.9\r\n\r\nText.\r\n\r\n## v1.0.0\r\n")

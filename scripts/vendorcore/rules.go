@@ -32,7 +32,8 @@ var vendoredFiles = map[string]string{
 // of P1). Paths under it are the same as in core/; files are carried as they are, rules
 // do not apply to them. A file with the same path upstream is an error: upstream started
 // its own, and ours would silently overwrite it.
-const addedDir = "scripts/vendorcore/files"
+// The leading underscore keeps go build ./... out: the files compile only in core/.
+const addedDir = "scripts/vendorcore/_files"
 
 // importPrefix is the upstream module path; convertGo replaces it with coreImport.
 const (
@@ -76,6 +77,98 @@ type rule struct {
 // to is a rule's Replace: a string, possibly empty.
 func to(s string) *string { return &s }
 
-// rules are the patches. Empty so far: the package and import conversion is done by
-// convertGo, not by rules.
-var rules = []rule{}
+// rules are the patches. The package and import conversion is done by convertGo, not by
+// rules.
+var rules = []rule{
+	// P1: every socket of the core comes from the dialer of the session (§06). uTLS
+	// connections take the dial function from their caller instead of building
+	// &net.Dialer{} themselves; dialFunc is declared in _files/client/transport.go.
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `(?m)^()func utlsDialContext\(ctx context\.Context, network, addr string, config \*utls\.Config, id \*utls\.ClientHelloID\) \(\*utls\.UConn, error\) \{$`,
+		Replace: to("func utlsDialContext(ctx context.Context, network, addr string, config *utls.Config, id *utls.ClientHelloID, dial dialFunc) (*utls.UConn, error) {"),
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `(?m)^(\t)dialer := &net\.Dialer\{\}\n\tconn, err := dialer\.DialContext\(ctx, network, addr\)$`,
+		Replace: to("${1}conn, err := dial(ctx, network, addr)"),
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern:     `(?m)^(\t)inner         http\.RoundTripper$`,
+		InsertAfter: "dial          dialFunc",
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `(?m)^()func NewUTLSRoundTripper\(config \*utls\.Config, id \*utls\.ClientHelloID\) \*utlsRoundTripper \{$`,
+		Replace: to("func NewUTLSRoundTripper(config *utls.Config, id *utls.ClientHelloID, dial dialFunc) *utlsRoundTripper {"),
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern:     `(?m)^(\t\t)config:        config,$`,
+		InsertAfter: "dial:          dial,",
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `makeRoundTripper\(req, rt\.config, rt\.clientHelloID\)`,
+		Replace: to("makeRoundTripper(req, rt.config, rt.clientHelloID, rt.dial)"),
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `(?m)^()func makeRoundTripper\(req \*http\.Request, config \*utls\.Config, id \*utls\.ClientHelloID\) \(http\.RoundTripper, error\) \{$`,
+		Replace: to("func makeRoundTripper(req *http.Request, config *utls.Config, id *utls.ClientHelloID, dial dialFunc) (http.RoundTripper, error) {"),
+	},
+	{
+		File: "client/utls.go", Count: 2,
+		Pattern: `utlsDialContext\((req\.Context\(\)|ctx), "tcp", addr, config, id\)`,
+		Replace: to(`utlsDialContext(${1}, "tcp", addr, config, id, dial)`),
+	},
+	// The HTTP/1.1 transport of uTLS clones http.DefaultTransport: its DialContext and
+	// its proxy from the environment would take a connection past the hook (to the proxy).
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern:     `(?m)^(\t\t)tr\.DialTLSContext = dialTLSContext$`,
+		InsertAfter: "tr.DialContext = dial\n\t\ttr.Proxy = nil",
+	},
+	// Upstream main, not called by dnstt-cli, keeps building: it gets the dialer it had.
+	{
+		File: "client/main.go", Count: 1,
+		Pattern: `NewUTLSRoundTripper\(nil, utlsClientHelloID\)`,
+		Replace: to("NewUTLSRoundTripper(nil, utlsClientHelloID, (&net.Dialer{}).DialContext)"),
+	},
+	{
+		File: "client/main.go", Count: 1,
+		Pattern: `utlsDialContext\(ctx, network, addr, nil, utlsClientHelloID\)`,
+		Replace: to("utlsDialContext(ctx, network, addr, nil, utlsClientHelloID, (&net.Dialer{}).DialContext)"),
+	},
+
+	// P1: the goroutines of a transport end when it is closed, instead of living on after
+	// the session: upstream creates one session per process and never closes it, while
+	// dnstt-cli creates a session per connection to the server. QueuePacketConn.Closed and
+	// OutgoingUntilClosed are declared in _files/turbotunnel/closed.go.
+	//
+	// DNSPacketConn: the send loop waits on the close too.
+	{
+		File: "client/dns.go", Count: 1,
+		Pattern:     `(?m)^(\t\t\t)case <-pollTimer\.C:\n\t\t\t\tpollTimerExpired = true$`,
+		InsertAfter: "case <-c.QueuePacketConn.Closed():\n\t\t\t\treturn nil",
+	},
+	// HTTPPacketConn and TLSPacketConn: the send loops range over the outgoing queue
+	// until the close, not over the queue itself, which is never closed.
+	{
+		File: "client/http.go", Count: 1,
+		Pattern: `(?m)^(\t)for p := range c\.QueuePacketConn\.OutgoingQueue\(turbotunnel\.DummyAddr\{\}\) \{$`,
+		Replace: to("${1}for p := range c.QueuePacketConn.OutgoingUntilClosed(turbotunnel.DummyAddr{}) {"),
+	},
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern: `(?m)^(\t)for p := range c\.QueuePacketConn\.OutgoingQueue\(turbotunnel\.DummyAddr\{\}\) \{$`,
+		Replace: to("${1}for p := range c.QueuePacketConn.OutgoingUntilClosed(turbotunnel.DummyAddr{}) {"),
+	},
+	// TLSPacketConn redials after every broken connection; a closed one does not.
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern:     `(?m)^(\t\t\t)conn\.Close\(\)$`,
+		InsertAfter: "select {\n\t\t\tcase <-c.QueuePacketConn.Closed():\n\t\t\t\treturn\n\t\t\tdefault:\n\t\t\t}",
+	},
+}

@@ -359,7 +359,7 @@ Known TLS fingerprints for -utls are:
 				transport.Proxy = nil
 				rt = transport
 			} else {
-				rt = NewUTLSRoundTripper(nil, utlsClientHelloID)
+				rt = NewUTLSRoundTripper(nil, utlsClientHelloID, (&net.Dialer{}).DialContext)
 			}
 			pconn, err := NewHTTPPacketConn(rt, dohURL, 32)
 			return addr, pconn, err
@@ -372,7 +372,7 @@ Known TLS fingerprints for -utls are:
 				dialTLSContext = (&tls.Dialer{}).DialContext
 			} else {
 				dialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return utlsDialContext(ctx, network, addr, nil, utlsClientHelloID)
+					return utlsDialContext(ctx, network, addr, nil, utlsClientHelloID, (&net.Dialer{}).DialContext)
 				}
 			}
 			pconn, err := NewTLSPacketConn(dotAddr, dialTLSContext)

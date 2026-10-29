@@ -361,6 +361,8 @@ func (c *DNSPacketConn) sendLoop(transport net.PacketConn, addr net.Addr) error 
 			case <-c.pollChan:
 			case <-pollTimer.C:
 				pollTimerExpired = true
+			case <-c.QueuePacketConn.Closed():
+				return nil
 			}
 		}
 

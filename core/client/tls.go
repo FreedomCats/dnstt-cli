@@ -74,6 +74,11 @@ func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, netw
 			}()
 			wg.Wait()
 			conn.Close()
+			select {
+			case <-c.QueuePacketConn.Closed():
+				return
+			default:
+			}
 
 			// Whenever the TLS connection dies, redial a new one.
 			conn, err = dial()
@@ -112,7 +117,7 @@ func (c *TLSPacketConn) recvLoop(conn net.Conn) error {
 // length-prefixed, to conn.
 func (c *TLSPacketConn) sendLoop(conn net.Conn) error {
 	bw := bufio.NewWriter(conn)
-	for p := range c.QueuePacketConn.OutgoingQueue(turbotunnel.DummyAddr{}) {
+	for p := range c.QueuePacketConn.OutgoingUntilClosed(turbotunnel.DummyAddr{}) {
 		length := uint16(len(p))
 		if int(length) != len(p) {
 			panic(len(p))
