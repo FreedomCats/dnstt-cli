@@ -1,5 +1,5 @@
-# Исходники храним и выдаём с LF: core/ должен побайтово совпадать с апстримом
-# dnstt, иначе дифф при обновлении ядра забивается концами строк.
+# Sources are stored and checked out with LF: core/ must match the dnstt upstream
+# byte for byte, otherwise the diff on a core update drowns in line endings.
 * text=auto eol=lf
 
 *.go       text eol=lf

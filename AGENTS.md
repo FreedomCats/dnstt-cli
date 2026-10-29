@@ -1,113 +1,126 @@
-# Правила проекта для агентов
+# Project rules for agents
 
-## Личные данные — никогда в репозиторий
+## Language
 
-**Это вопрос безопасности разработчика, а не аккуратности.** Если разработчика
-вычислят, это угрожает его жизни, здоровью и свободе. Поэтому в репозиторий не
-должно попадать ничего, что позволяет его опознать: настоящее имя, почта,
-IP-адреса, имена профилей, организация, где он работает, адреса серверов и
-резолверов, детали рабочего окружения и ОС, имя пользователя — и вообще любая
-деталь, по которой его легко найти. При сомнении — не записывать.
+Everything in the repository is in English: code comments, documentation in `doc/`,
+`README.md`, `AGENTS.md` and other project files, project memory and working notes
+(`doc/local/`), commit messages, release notes. Comments in code carried over from other
+projects (qwdtt-cli, csqtt-cli, the dnstt upstream) may stay as they are; translating them
+is optional.
 
-Репозиторий публичный. В документацию (`README.md`, примеры), код, тесты,
-комментарии и сообщения коммитов **нельзя** записывать:
+Conversation with the user is in the user's language (Russian), not in English.
 
-- настоящее имя пользователя, его почты (личную и рабочую), имя его личного
-  аккаунта GitHub и других аккаунтов, работодателя;
-- окружение разработчика: дистрибутив и машину, на которых идёт работа, имя
-  пользователя, группы, домашние каталоги (`/home/…`, `C:\Users\…`), рабочие сети;
-- даты и время работы: когда что сделано, проверено, сверено;
-- внешние IP-адреса пользователя: домашний и адрес VPS;
-- имя и адрес сервера dnstt: домен туннеля, домен его сервера имён (NS), IP, порт;
-- открытый ключ сервера dnstt — ни целиком, ни сокращённый: по нему сервер
-  узнаётся так же, как по адресу;
-- резолверы, через которые туннель работает у пользователя: адреса DoH и DoT,
-  UDP-резолверы, особенно резолверы провайдера и роутера — по ним видны провайдер
-  и регион. Это касается и списков «рабочих резолверов» из живых прогонов;
-- адреса домашней сети (префикс ULA, локальные адреса машин) и корпоративной сети
-  (сервер корпоративного VPN, корпоративные DNS, домены поиска);
-- учётные данные выхода туннеля на сервере: логины, пароли и ключи SOCKS5-прокси
-  или SSH;
-- имена профилей пользователя. Исключение — `home`: это и имя-пример в коде, тестах
-  и README, его можно оставлять;
-- пароли, ключи и любые значения из файлов секретов и профилей пользователя.
+## Personal data — never in the repository
 
-Вместо них — слова или заглушки: «адрес VPS», «домашний адрес», «сервер dnstt»,
-«резолвер провайдера», `<профиль>`, `<ключ>`, `10.x`, `192.168.1.x`, `fd…`,
-пользователь `user`. Домены — зарезервированные `t.example.com`, `tns.example.com`,
-`doh.example`, `dot.example` (RFC 2606). В тестах — документационные адреса
-(`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) и выдуманные
-значения; ключи — сгенерированные для теста, а не взятые с живого сервера.
+**This is about the developer's safety, not tidiness.** If the developer is identified,
+their life, health and freedom are at risk. Nothing that could identify them may get into
+the repository: real name, email, IP addresses, profile names, employer, addresses of
+servers and resolvers, details of the work environment and OS, user name — and in general
+any detail that makes them easy to find. When in doubt, do not write it down.
 
-Показывать эти значения пользователю в чате можно. В файлы репозитория — нет.
+The repository is public. Documentation (`README.md`, examples), code, tests, comments and
+commit messages **must not** contain:
 
-## Документы в `doc/`: что публикуется, а что нет
+- the user's real name, their emails (personal and work), the name of their personal
+  GitHub account and other accounts, their employer;
+- the developer's environment: the distribution and machine the work is done on, user
+  name, groups, home directories (`/home/…`, `C:\Users\…`), work networks;
+- dates and times of work: when something was done, checked, compared;
+- the user's external IP addresses: home address and VPS address;
+- the name and address of the dnstt server: tunnel domain, the domain of its name server
+  (NS), IP, port;
+- the dnstt server's public key — neither in full nor shortened: it identifies the server
+  just as well as its address;
+- the resolvers through which the tunnel works for the user: DoH and DoT addresses, UDP
+  resolvers, especially the ISP's and the router's resolvers — they reveal the ISP and
+  the region. This includes lists of "working resolvers" from live runs;
+- home network addresses (ULA prefix, local machine addresses) and corporate network
+  addresses (corporate VPN server, corporate DNS, search domains);
+- credentials of the tunnel exit on the server: logins, passwords and keys of the SOCKS5
+  proxy or SSH;
+- the user's profile names. The exception is `home`: it is the example name in code,
+  tests and README and may stay;
+- passwords, keys and any values from the user's secret and profile files.
 
-В репозитории — всё, что лежит прямо в `doc/`. На эти документы действуют все правила
-выше: ни дат работы, ни времени суток («ночью», «поздно»), ни окружения и машины, ни имён
-и путей — только суть. Итоги живых проверок писать можно — без окружения, скоростей канала,
-резолверов и адресов; ход работы по дням — только в журналах.
+Use words or placeholders instead: "VPS address", "home address", "dnstt server", "ISP
+resolver", `<profile>`, `<key>`, `10.x`, `192.168.1.x`, `fd…`, user `user`. Domains — the
+reserved `t.example.com`, `tns.example.com`, `doh.example`, `dot.example` (RFC 2606). In
+tests — documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
+`2001:db8::/32`) and made-up values; keys are generated for the test, never taken from a
+live server.
 
-Вне git (`.gitignore`) — два подкаталога:
+These values may be shown to the user in chat. Not in repository files.
 
-- `doc/local/` — планы и журналы этапов `plan-*.md` (в них неизбежно окружение и
-  даты), рабочие записки (точка продолжения для новых сессий — `doc/local/resume.md`)
-  и копии документов до чистки;
-- `doc/runs/` — скрипты и логи живых прогонов.
+## Documents in `doc/`: what is published and what is not
 
-Новый документ для публикации проверить по этому файлу до `git add`; черновик с
-окружением класть в `doc/local/`.
+Everything directly in `doc/` is in the repository. All the rules above apply to these
+documents: no dates of work, no time of day ("at night", "late"), no environment or
+machine, no names or paths — only the substance. Results of live checks may be written
+down — without the environment, link speeds, resolvers and addresses; the day-by-day
+course of work goes only into the logs.
 
-## Чужой код под несовместимой лицензией
+Two subdirectories are outside git (`.gitignore`):
 
-Лицензия dnstt-cli ещё не выбрана (`doc/analysis.md`, §6). Пока выбора нет, действует
-строгий вариант — как для оболочки под MIT, чтобы не закрыть ни один из путей.
+- `doc/local/` — stage plans and logs `plan-*.md` (they inevitably contain the
+  environment and dates), working notes (the resume point for new sessions —
+  `doc/local/resume.md`) and copies of documents before cleanup;
+- `doc/runs/` — scripts and logs of live runs.
 
-Код под лицензией, несовместимой с лицензией оболочки, исполнитель — тот, кто пишет
-код, — не открывает. Сейчас это:
+Check a new document for publication against this file before `git add`; put a draft
+with environment details into `doc/local/`.
 
-- фрагменты qwdtt-cli под GPL-3: `internal/core` (вендор qWDTT),
-  `supervisor/restart.go`, `captcha/token.go`, `captcha/solver.go` и их тесты;
-- Android-клиенты qWDTT и CSQTT на Kotlin, ядро CSQTT (`core/` в csqtt-cli) —
-  PolyForm Noncommercial.
+## Third-party code under an incompatible license
 
-Остальной код csqtt-cli (MIT) и ядро dnstt (общественное достояние, CC0) читать и
-переносить можно.
+The dnstt-cli license is not chosen yet (`doc/analysis.md`, §6). Until it is, the strict
+variant applies — as for a shell under MIT — so that neither option is closed off.
 
-Если нужно знать, что делает закрытый для исполнителя код, его читает другой участник —
-координатор или отдельный агент, который потом сам код не пишет. Исполнителю он передаёт
-описание поведения своими словами: какие запросы и поля, порядок шагов, тайминги,
-условия, наблюдаемые результаты. Описание не повторяет структуру кода, имена функций и
-переменных, порядок строк; фрагменты кода, даже пересказанные, не передаются. Протоколы,
-форматы и поведение — факты, их реализуют заново.
+The implementer — whoever writes the code — does not open code under a license
+incompatible with the shell's license. Currently that is:
 
-Откуда взято описание (файл чужого проекта, без путей с машины), — указать в журнале
-этапа (`doc/local/`).
+- the GPL-3 parts of qwdtt-cli: `internal/core` (vendored qWDTT),
+  `supervisor/restart.go`, `captcha/token.go`, `captcha/solver.go` and their tests;
+- the Android clients of qWDTT and CSQTT in Kotlin and the CSQTT core (`core/` in
+  csqtt-cli) — PolyForm Noncommercial.
 
-## Коммиты
+The rest of csqtt-cli (MIT) and the dnstt core (public domain, CC0) may be read and
+carried over.
 
-Автор и коммиттер — только `FreedomCats <noreply@freedomcats.invalid>` (задано в
-`.git/config` репозитория). Дата — сегодняшняя, но без времени: полночь UTC.
-Время дня и часовой пояс в историю не попадают:
+If it is necessary to know what code closed to the implementer does, another participant
+reads it — the coordinator or a separate agent who will not write the code afterwards. They
+give the implementer a description of the behaviour in their own words: which requests
+and fields, the order of steps, timings, conditions, observable results. The description
+does not repeat the structure of the code, names of functions and variables, or the order
+of lines; code fragments, even paraphrased, are not passed on. Protocols, formats and
+behaviour are facts and are implemented anew.
 
-    d=$(date +%F)T00:00:00Z
+Where the description came from (a file of the other project, without paths from the
+machine) is recorded in the stage log (`doc/local/`).
+
+## Commits
+
+Author and committer — only `FreedomCats <noreply@freedomcats.invalid>` (set in the
+repository's `.git/config`). The date is today's, but without the time: midnight UTC.
+Neither the time of day nor the time zone gets into the history:
+
+    d=$(date -u +%F)T00:00:00Z
     GIT_AUTHOR_DATE=$d GIT_COMMITTER_DATE=$d git commit …
 
-Домен `.invalid` зарезервирован (RFC 2606): такой почты ни у кого нет, и GitHub
-не припишет коммиты чужой учётной записи.
+The `.invalid` domain is reserved (RFC 2606): nobody has such an email, and GitHub will
+not attribute the commits to someone else's account.
 
-То же при `--amend`, `rebase` и `cherry-pick`: git ставит коммиттеру текущее время.
+The same applies to `--amend`, `rebase` and `cherry-pick`: git sets the committer date to
+the current time.
 
-Теги релизов (`v*`) — только лёгкие: `git tag v0.1.0`, без `-a`, `-s` и `-m`.
-Аннотированный тег хранит имя, почту и дату того, кто его поставил.
+Release tags (`v*`) — lightweight only: `git tag v0.1.0`, without `-a`, `-s` or `-m`. An
+annotated tag stores the name, email and date of whoever created it.
 
-**Перед каждым коммитом** проверить `git diff --cached` на всё перечисленное выше:
-адреса, полученные в живых прогонах, значения из каталога настроек dnstt-cli, домен и
-ключ сервера, резолверы, учётные данные выхода, пути и имена с машины разработчика,
-даты. После коммита —
-`git log -1 --format='%an <%ae> %ad | %cn <%ce> %cd' --date=iso-strict`. Сами
-запретные значения в этот файл и в скрипты проверки не записываются.
+**Before every commit** check `git diff --cached` for everything listed above: addresses
+obtained in live runs, values from the dnstt-cli config directory, the server's domain and
+key, resolvers, exit credentials, paths and names from the developer's machine, dates.
+After the commit —
+`git log -1 --format='%an <%ae> %ad | %cn <%ce> %cd' --date=iso-strict`. The forbidden
+values themselves are never written into this file or into check scripts.
 
-Если такое всё же попало в историю — сказать пользователю сразу. Чистка истории
-(`git filter-repo`) переписывает все хеши коммитов и делается только с согласия
-пользователя.
+If something like that does get into the history — tell the user immediately. Cleaning
+the history (`git filter-repo`) rewrites all commit hashes and is done only with the
+user's consent.

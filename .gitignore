@@ -1,27 +1,27 @@
-# Сборка
+# Build
 /build/
 /dist/
 *.exe
-# go build ./cmd/dnstt-cli без -o кладёт бинарь в корень.
+# go build ./cmd/dnstt-cli without -o puts the binary in the root.
 /dnstt-cli
 *.zip
 
-# Конфигурация и секреты — никогда не в репозиторий.
-# Профиль хранит ссылки на секреты, но по ошибке в него можно вписать и сам пароль.
+# Configuration and secrets — never in the repository.
+# A profile stores references to secrets, but a password can be written into it by mistake.
 profiles.toml
 secrets.json
-# Ключи сервера dnstt: открытый ключ выдаёт сервер, закрытый — тем более.
+# dnstt server keys: the public key identifies the server, the private key even more so.
 *.pub
 *.key
 
-# Локальное окружение
+# Local environment
 .idea/
 .vscode/
 *.log
 
-# Выгрузки сессий Claude Code: рабочие записи, а не код проекта.
+# Claude Code session exports: working records, not project code.
 /claude-sessions/
 
-# Журналы этапов, рабочие записки, скрипты и логи прогонов — локально (AGENTS.md).
+# Stage logs, working notes, scripts and logs of runs — local only (AGENTS.md).
 /doc/local/
 /doc/runs/
