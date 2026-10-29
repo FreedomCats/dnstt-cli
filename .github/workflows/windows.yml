@@ -1,0 +1,87 @@
+# Build and tests on Windows. The GitHub runner is disposable and runs with administrator
+# rights, so the tests that are skipped without them run here too: WFP sessions (winsys).
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# github.workflow in a call from another workflow is the caller's name: without a name of
+# its own windows.yml and linux.yml would share a group, and one would cancel the other.
+concurrency:
+  group: ${{ github.workflow }}-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned by commit hash: a tag can be moved.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      # Two upstream tests of core/noise call t.Fatal from a goroutine; upstream code
+      # stays verbatim, so that check is off for core/ only.
+      - name: go vet
+        run: |
+          go vet $(go list ./... | grep -v /core/)
+          go vet -testinggoroutine=false ./core/...
+
+      # Modules before the tests: the winsys tests close the network with WFP rules
+      # while they run, and a download at that time would fail.
+      - name: go mod download
+        run: go mod download
+
+      - name: go test
+        run: go test -count=1 ./...
+
+  # The dnstt core: core/ against the mirror at the commit of CORE_VERSION and the rules.
+  # On Windows git may check the mirror out with CRLF: -check must not tell line endings
+  # apart.
+  core:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Core upstream
+        run: |
+          upstream=$(awk '$1 == "upstream" { print $3 }' core/CORE_VERSION)
+          commit=$(awk '$1 == "commit" { print $3 }' core/CORE_VERSION)
+          git init -q "$RUNNER_TEMP/dnstt"
+          git -C "$RUNNER_TEMP/dnstt" fetch -q --depth 1 "$upstream" "$commit"
+          git -C "$RUNNER_TEMP/dnstt" -c advice.detachedHead=false checkout -q FETCH_HEAD
+
+      - name: vendorcore -check
+        run: go run ./scripts/vendorcore -check -upstream "$RUNNER_TEMP/dnstt"

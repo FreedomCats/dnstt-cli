@@ -1,0 +1,126 @@
+# Build and tests on Linux. Tests run as an ordinary user: that is how a developer runs
+# them, and a test that reached for privileges (sudo) fails here instead of passing
+# unnoticed, as it would on the Windows runner with its administrator rights. Tests that
+# change the network (DNSTT_CLI_TEST_NETNS) run as a separate job in a container: on the
+# runner itself they would move its default route.
+name: linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # Container image for the tests that change the network: ubuntu:latest pinned by hash.
+  IMAGE: ubuntu@sha256:d1e2e92c075e5ca139d51a140fff46f84315c0fdce203eab2807c7e495eff4f9
+
+# github.workflow in a call from another workflow is the caller's name: without a name of
+# its own windows.yml and linux.yml would share a group, and one would cancel the other.
+concurrency:
+  group: ${{ github.workflow }}-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Actions are pinned by commit hash: a tag can be moved.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: CGO_ENABLED=0 go build ./...
+
+      # Two upstream tests of core/noise call t.Fatal from a goroutine; upstream code
+      # stays verbatim, so that check is off for core/ only.
+      - name: go vet
+        run: |
+          go vet $(go list ./... | grep -v /core/)
+          go vet -testinggoroutine=false ./core/...
+
+      # The keyring tests start their own dbus-daemon; without it they would be skipped,
+      # and DNSTT_CLI_TEST_DBUS turns the skip into a failure.
+      - name: dbus-daemon
+        run: command -v dbus-daemon || { sudo apt-get update && sudo apt-get install -y dbus-daemon; }
+
+      # -race needs cgo, so CGO_ENABLED is not off here.
+      - name: go test -race
+        env:
+          DNSTT_CLI_TEST_DBUS: '1'
+        run: go test -race -count=1 ./...
+
+  # Default route, nftables, TUN — in the container's own network namespace.
+  netns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build the tests
+        run: |
+          mkdir -p build/out
+          go test -c -o build/out/linuxsys.test ./internal/linuxsys
+
+      # A skip here is a failure too: it means the network checks did not run at all.
+      # IPv6 is switched on in the container explicitly: without it the IPv6 block checks
+      # are skipped.
+      - name: Tests in the container
+        run: |
+          set -o pipefail
+          docker run --rm --cap-add NET_ADMIN --device /dev/net/tun \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            -e DNSTT_CLI_TEST_NETNS=1 -v "$PWD/build/out":/dnstt-cli:ro "$IMAGE" \
+            /dnstt-cli/linuxsys.test -test.count=1 -test.v | tee build/out/linuxsys.log
+          if grep -- '--- SKIP' build/out/linuxsys.log; then
+            echo "::error::linuxsys: tests skipped"
+            exit 1
+          fi
+          if ! grep -q -- '--- PASS' build/out/linuxsys.log; then
+            echo "::error::linuxsys: no tests"
+            exit 1
+          fi
+
+  # The dnstt core: core/ against the mirror at the commit of CORE_VERSION and the rules.
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Core upstream
+        run: |
+          upstream=$(awk '$1 == "upstream" { print $3 }' core/CORE_VERSION)
+          commit=$(awk '$1 == "commit" { print $3 }' core/CORE_VERSION)
+          git init -q "$RUNNER_TEMP/dnstt"
+          git -C "$RUNNER_TEMP/dnstt" fetch -q --depth 1 "$upstream" "$commit"
+          git -C "$RUNNER_TEMP/dnstt" -c advice.detachedHead=false checkout -q FETCH_HEAD
+
+      - name: vendorcore -check
+        run: go run ./scripts/vendorcore -check -upstream "$RUNNER_TEMP/dnstt"
