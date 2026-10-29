@@ -6,7 +6,7 @@ require (
 	github.com/flynn/noise v1.0.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/nftables v0.3.1-0.20260430172505-f9b52ed2ba65
-	github.com/refraction-networking/utls v1.6.6
+	github.com/refraction-networking/utls v1.7.3
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xtaci/kcp-go/v5 v5.6.8
@@ -21,7 +21,7 @@ require (
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/cloudflare/circl v1.3.7 // indirect
+	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect

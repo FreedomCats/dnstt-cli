@@ -81,7 +81,7 @@ func to(s string) *string { return &s }
 
 // rules are the patches. The package and import conversion is done by convertGo, not by
 // rules.
-var rules = slices.Concat(p1Rules, p2Rules, logfRules, serverRules)
+var rules = slices.Concat(p1Rules, p2Rules, p5Rules, logfRules, serverRules)
 
 var p1Rules = []rule{
 	// P1: every socket of the core comes from the dialer of the session (§06). uTLS
@@ -189,6 +189,21 @@ var p2Rules = []rule{
 		File: "client/tls.go", Count: 1,
 		Pattern: `(?m)^(// )the resolver, reconnecting as necessary\. It closes the connection if any\n// reconnection attempt fails\.$`,
 		Replace: to("${1}the resolver, reconnecting as necessary. A failed reconnection is retried with\n${1}a backoff until the TLSPacketConn is closed (dnstt-cli, P2)."),
+	},
+}
+
+// P5: the fingerprints of uTLS v1.7 newer than the upstream table, under labels in its
+// style. DefaultUTLS (_files/client/session.go) is built from them.
+var p5Rules = []rule{
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern:     `(?m)^(\t)\{"Chrome_120", &utls\.HelloChrome_120\},$`,
+		InsertAfter: "{\"Chrome_131\", &utls.HelloChrome_131},",
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern:     `(?m)^(\t)\{"iOS_14", &utls\.HelloIOS_14\},$`,
+		InsertAfter: "{\"Safari_16_0\", &utls.HelloSafari_16_0},",
 	},
 }
 

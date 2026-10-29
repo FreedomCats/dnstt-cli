@@ -352,14 +352,16 @@ func TestDialRejects(t *testing.T) {
 	}
 }
 
-// DefaultUTLS is the upstream default of -utls: the flag in upstream main must carry the
-// same string, otherwise upstream changed its default and DefaultUTLS has to follow.
-func TestDefaultUTLSIsUpstream(t *testing.T) {
+// upstreamUTLS is the -utls default of upstream main that DefaultUTLS was made from (P5).
+// When upstream changes it, DefaultUTLS is looked at again.
+const upstreamUTLS = "4*random,3*Firefox_120,1*Firefox_105,3*Chrome_120,1*Chrome_102,1*iOS_14,1*iOS_13"
+
+func TestUpstreamUTLSDefault(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(src, []byte(strconv.Quote(DefaultUTLS))) {
-		t.Errorf("upstream main.go has no %q: its -utls default changed", DefaultUTLS)
+	if !bytes.Contains(src, []byte(strconv.Quote(upstreamUTLS))) {
+		t.Errorf("upstream main.go has no %q: its -utls default changed, look at DefaultUTLS", upstreamUTLS)
 	}
 }

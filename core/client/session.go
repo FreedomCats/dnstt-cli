@@ -22,8 +22,15 @@ import (
 	"github.com/FreedomCats/dnstt-cli/core/turbotunnel"
 )
 
-// DefaultUTLS is the uTLS distribution of the upstream -utls flag.
-const DefaultUTLS = "4*random,3*Firefox_120,1*Firefox_105,3*Chrome_120,1*Chrome_102,1*iOS_14,1*iOS_13"
+// DefaultUTLS is the uTLS distribution of dnstt-cli (P5): the shape of the upstream -utls
+// default with the newest fingerprints of uTLS v1.7. Upstream's dates from uTLS v1.6
+// (Chrome 102 and 120, Firefox 105 and 120, iOS 13 and 14), and an old fingerprint in
+// time becomes a signature in itself. uTLS has no Firefox newer than 120.
+//
+// uTLS stays at v1.7: from v1.8.0 a randomized hello may offer X25519MLKEM768 without a
+// key share, and against a server that prefers it (Go's among them) about one handshake
+// in seven fails on the HelloRetryRequest. TestDefaultUTLSFingerprints catches it.
+const DefaultUTLS = "4*random,4*Chrome_131,4*Firefox_120,1*Safari_16_0,1*iOS_14"
 
 // Config is what a session needs: the tunnel, the resolver and the hooks of the shell.
 type Config struct {

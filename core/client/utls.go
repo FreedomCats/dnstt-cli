@@ -43,11 +43,13 @@ var utlsClientHelloIDMap = []struct {
 	{"Chrome_100", &utls.HelloChrome_100},
 	{"Chrome_102", &utls.HelloChrome_102},
 	{"Chrome_120", &utls.HelloChrome_120},
+	{"Chrome_131", &utls.HelloChrome_131},
 	{"iOS", &utls.HelloIOS_Auto},
 	{"iOS_11_1", &utls.HelloIOS_11_1},
 	{"iOS_12_1", &utls.HelloIOS_12_1},
 	{"iOS_13", &utls.HelloIOS_13},
 	{"iOS_14", &utls.HelloIOS_14},
+	{"Safari_16_0", &utls.HelloSafari_16_0},
 }
 
 // utlsLookup returns a *utls.ClientHelloID from utlsClientHelloIDMap by a
