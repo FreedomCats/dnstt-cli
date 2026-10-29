@@ -35,7 +35,7 @@ Checked by reading the upstream code, not taken from descriptions.
 | DoT gives up for good after one failed redial | `dnstt-client/tls.go` | Core patch P2 |
 | UDP mode sends every query from one socket | `dnstt-client/main.go` | Core patch P3 |
 | The resolver's host name is resolved by the system | `main.go` (`ResolveUDPAddr`), `http.Transport`, `utls.go` | Own bootstrap resolution through bound sockets (R5) |
-| uTLS `v1.6.6` | `go.mod` | Update the dependency; P5 if its API changed |
+| uTLS `v1.6.6` | `go.mod` | Update the dependency; P5 if its API changed (done: `v1.7.3`, P5) |
 
 ---
 
@@ -228,7 +228,7 @@ type Config struct {
     Control          func(network, address string, c syscall.RawConn) error // R4
     LookupIP         func(ctx context.Context, host string) ([]netip.Addr, error) // R5
     KeepAliveTimeout time.Duration // client smux timeout; 0 — upstream's 2 min
-    Logf             func(format string, args ...any)
+    Logf             func(format string, args ...any) // the session's and its transports' messages
 }
 
 // Dial builds transport → DNSPacketConn → KCP → Noise → smux with the settings of
@@ -250,8 +250,15 @@ func (s *Session) Close() error
   rules (§07, P1).
 - DoH takes only `https://` URLs: an `http://` one would go to `http.DefaultTransport`
   past the hook.
-- A host name of a resolver goes through `LookupIP`; without it the system resolver
-  answers until P4.
+- A host name of a resolver goes through `LookupIP` only (P4); without it `Dial` refuses
+  a host name at once. The system resolver is never asked.
+- The upstream transports log through a function their constructor takes (a rule);
+  `Dial` gives them `Logf`, so nothing of the core goes to the process-wide `log`.
+- `DefaultUTLS` is our own (P5): `4*random,4*Chrome_131,4*Firefox_120,1*Safari_16_0,1*iOS_14`,
+  the shape of the upstream default with the newest fingerprints of uTLS `v1.7`. uTLS
+  stays below `v1.8`: from `v1.8.0` a randomized hello may offer X25519MLKEM768 without a
+  key share, and against a server that prefers it about one handshake in seven fails on
+  the HelloRetryRequest.
 - The smux keepalive interval is the library's 10 s, or half the timeout if that is
   shorter. smux checks the timeout once per its period, so a dead session ends between one
   and two timeouts after the last data.
@@ -373,7 +380,7 @@ Upstream `main` and `run` are not used; the session builds its sockets in `trans
 
 | # | Where | What | Binding |
 |---|---|---|---|
-| 1 | `transport.go` · `sockets.listenUDP` | UDP-mode queries | `net.ListenConfig{Control}`; a socket per query with P3 |
+| 1 | `transport.go` · `sockets.listenUDP` | UDP-mode queries | `net.ListenConfig{Control}`; a socket per query (P3, `udp.go`) |
 | 2 | `utls.go` · `utlsDialContext` | TCP to DoH/DoT with uTLS | `dial` of the caller (rule) = `sockets.dial`: `net.Dialer{Control}` |
 | 3 | `transport.go` · `http.Transport` | DoH without uTLS | `DialContext: sockets.dial`, no proxy |
 | 4 | `transport.go` · DoT dialer | DoT without uTLS | `tls.Client` over `sockets.dial` |
@@ -382,6 +389,12 @@ Upstream `main` and `run` are not used; the session builds its sockets in `trans
 The HTTP/1.1 transport of uTLS DoH is a clone of `http.DefaultTransport`; a rule gives it
 `sockets.dial` as `DialContext` and takes away its proxy from the environment, which would
 otherwise carry the connection past the hook.
+
+The per-query socket of point 1 is opened on `:0`, so `Control` does not see the
+destination, and Go hands `Control` the network `udp6` both for an IPv6-only socket and
+for a dual-stack one. `netguard` reads `IPV6_V6ONLY` of such a socket: the `udp6` socket
+for an IPv6 resolver is bound for IPv6 only; where the option cannot be read, the socket
+is taken as dual-stack.
 
 **Guard** (`scripts/vendorcore/sockets.go`), as `TestNetguardCoverage` in qwdtt-cli and the
 socket guard in csqtt-cli: `vendorcore` parses every non-test Go file of `core/` and finds
@@ -405,10 +418,10 @@ All as `vendorcore` rules on top of the upstream (R1), each with a test.
 | # | Patch | Why | Stage |
 |---|---|---|---|
 | P1 | `dnstt-client` as a package; session API and `Control` in new files; uTLS dials through its caller's function; transport loops end and TLS stops redialing when their conn is closed | R1, R2, R4 | E0 |
-| P2 | DoT redial with a backoff instead of giving up | `analysis.md` §1, item 2 | E1 |
-| P3 | UDP mode: a socket per query (or a small rotating pool) | `analysis.md` §1, item 3 | E1 |
-| P4 | names of DoH/DoT resolvers through `LookupIP` instead of the system | R5 | E1 |
-| P5 | newer uTLS and its fingerprints | `analysis.md` §1, item 5 | E1 |
+| P2 | DoT redial with a backoff (1·2^n s up to 64 s) instead of giving up | `analysis.md` §1, item 2 | E1, done |
+| P3 | UDP mode: a socket per query, an answer from any address, at most 256 waiting | `analysis.md` §1, item 3 | E1, done |
+| P4 | names of DoH/DoT resolvers through `LookupIP` only | R5 | E1, done |
+| P5 | uTLS `v1.7.3`, `Chrome_131` and `Safari_16_0` in the table, our own `DefaultUTLS` | `analysis.md` §1, item 5 | E1, done |
 | P6 | transport `tcp`: plain DNS over TCP to the resolver, length-prefixed like DoT | `slipnet://` profiles use it; some networks pass TCP :53 where UDP is blocked | E4 |
 | P7 | cap on the payload per query (smaller KCP MTU) | the `slipnet://` payload-size field; resolvers that cut large answers | E4 |
 

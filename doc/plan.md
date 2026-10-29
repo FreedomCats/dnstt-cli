@@ -25,16 +25,15 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 - Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
   E0 (results below, under "E0. Foundation").
-- Next: E1, starting with S0 (the user's test server) and S1 (core patches P2–P5). S0
-  needs the user: the server's values are asked for in chat and kept only in
-  `doc/local/plan-e1.md`.
+- E1: S1 done (core patches P2–P5, results under S1). Next: S0 (the user's test server)
+  and S2 (exit) or S3 (resolvers), which do not depend on each other. S0 needs the user:
+  the server's values are asked for in chat and kept only in `doc/local/plan-e1.md`.
 - CI is green on `main` (`linux`: test, netns, core; `windows`: test, core).
 - A new session first sets up the workspace as in F0: the mirror as `../dnstt` and
   csqtt-cli as `../csqtt-cli`; `go run ./scripts/vendorcore -check` and `go test ./...`
   confirm the state.
-- Carried over to E1 from E0: the per-query UDP socket of P3 and `netguard`'s choice of
-  families (S1); the upstream `log` output of the core into `Config.Logf` (S1); a full
-  session over DoH and DoT is first seen live (S8); `profiles.toml`, `Save` and its sudo
+- Carried over within E1: a full session over DoH and DoT and the new uTLS fingerprints
+  against public resolvers are first seen live (S8); `profiles.toml`, `Save` and its sudo
   tests (S6).
 - Open decisions: the license (MIT recommended, `analysis.md` §6) — needed before the
   first release (E4).
@@ -232,7 +231,24 @@ server restart and a network change. Tasks in order; S1–S3 do not depend on ea
 **Done when** upstream `dnstt-client` plus `curl --socks5-hostname` through it reaches a
 site, over DoH and over UDP.
 
-### S1. Core patches P2–P5
+### S1. Core patches P2–P5 — done
+
+**Result.** P2: `TLSPacketConn.redial` (own file) retries a failed redial after 1 s, 2, 4…
+up to 64 s until the transport is closed; tested against a TCP echo resolver whose dials
+fail. P3: `udpTransport` (own file) sends every query from a new socket through `Control`,
+waits up to 10 s for one answer from any address, keeps at most 256 queries waiting and
+drops one over the limit as a lost packet; a session through a forwarding resolver sees a
+source port per query. `netguard` reads `IPV6_V6ONLY`, so a `udp6` socket on `:0` is bound
+for IPv6 only (`architecture.md` §06). P4: `Dial` refuses a host name without `LookupIP`
+at once, also for DoH and DoT, which dial only when they first send; the
+`net.DefaultResolver` entry left the guard table. P5: uTLS `v1.7.3`, not `v1.8`: from
+`v1.8.0` about one randomized handshake in seven fails against a server that prefers
+X25519MLKEM768 (`architecture.md` §04); `Chrome_131` and `Safari_16_0` in the table; our
+own `DefaultUTLS`, every fingerprint of it tested through a DoH request to a Go TLS server.
+The transports log through a logf their constructor takes (rules), and `Dial` gives them
+`Config.Logf`. On the way: the upstream server, used only by tests, could panic when a test
+stopped it (a rule keeps its channel open). Not checked yet: the new fingerprints against
+public DoH and DoT resolvers — S8.
 
 As rules and own files, each with a test against the in-process server where it can be
 made:
