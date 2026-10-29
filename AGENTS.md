@@ -81,6 +81,8 @@ incompatible with the shell's license. Currently that is:
   `supervisor/restart.go`, `captcha/token.go`, `captcha/solver.go` and their tests;
 - the Android clients of qWDTT and CSQTT in Kotlin and the CSQTT core (`core/` in
   csqtt-cli) — PolyForm Noncommercial.
+- SlipNet (Android client) and SlipGate (server manager) — AGPL-3. The `slipnet://` format
+  is already described in `doc/architecture.md` §10.
 
 The rest of csqtt-cli (MIT) and the dnstt core (public domain, CC0) may be read and
 carried over.
