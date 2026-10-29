@@ -25,7 +25,17 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 - Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
   E0 (results below, under "E0. Foundation").
-- Next: E1, starting with S0 (the user's test server) and S1 (core patches P2–P5).
+- Next: E1, starting with S0 (the user's test server) and S1 (core patches P2–P5). S0
+  needs the user: the server's values are asked for in chat and kept only in
+  `doc/local/plan-e1.md`.
+- CI is green on `main` (`linux`: test, netns, core; `windows`: test, core).
+- A new session first sets up the workspace as in F0: the mirror as `../dnstt` and
+  csqtt-cli as `../csqtt-cli`; `go run ./scripts/vendorcore -check` and `go test ./...`
+  confirm the state.
+- Carried over to E1 from E0: the per-query UDP socket of P3 and `netguard`'s choice of
+  families (S1); the upstream `log` output of the core into `Config.Logf` (S1); a full
+  session over DoH and DoT is first seen live (S8); `profiles.toml`, `Save` and its sudo
+  tests (S6).
 - Open decisions: the license (MIT recommended, `analysis.md` §6) — needed before the
   first release (E4).
 - Working notes in `doc/local/` do not survive a cloud session (the directory is outside
