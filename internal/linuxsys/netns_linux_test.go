@@ -2,6 +2,7 @@ package linuxsys
 
 import (
 	"errors"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -48,6 +49,12 @@ func TestWatchNetworkEventsNetns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop()
+	// The callback keeps writing while the test prints the map: print a copy.
+	snapshot := func() map[uint64]int {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(seen)
+	}
 
 	link := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: "ttwatch0"}}
 	if err := netlink.LinkAdd(link); err != nil {
@@ -76,11 +83,11 @@ func TestWatchNetworkEventsNetns(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("events with index %d: %d, all: %v", index, n, seen)
+			t.Fatalf("events with index %d: %d, all: %v", index, n, snapshot())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Logf("events: %v", seen)
+	t.Logf("events: %v", snapshot())
 
 	now, ok, err := DefaultInterface(false, 0)
 	if err != nil || !ok || now.Index != uint32(index) {
