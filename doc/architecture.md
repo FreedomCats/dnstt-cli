@@ -128,9 +128,17 @@ address (`doh:https://doh.example/dns-query@192.0.2.1`, like `curl --resolve`; s
 addresses go comma-separated and are tried in turn; an `@` inside the URL itself is
 written `%40`), and without it the name is resolved through a bootstrap resolver over
 bound sockets. Built-in presets carry addresses, so they work under a closed kill-switch.
-The bootstrap resolver asks plain DNS of the profile's UDP resolvers given by address,
-then of public resolvers by address (1.1.1.1, 8.8.8.8, 9.9.9.9); the name of a DoH or DoT
-server goes in clear anyway, in the TLS SNI.
+A resolver given by address — `udp:192.0.2.53`, `doh:https://192.0.2.1/dns-query`, or a
+name with a pin — never needs the bootstrap resolver. It asks plain DNS of the profile's own
+`bootstrap` servers, and only them, if the profile has any; otherwise of the DNS servers
+the network gave the system (the ISP's resolver: in a network that lets through only some
+resolvers, it is the one that answers), then of the profile's UDP resolvers given by
+address. Public resolvers abroad are never asked unasked. The network's DNS is read at
+every lookup that is not cached, so a new network is taken up by itself; on Linux from
+resolv.conf (behind the systemd-resolved stub, its upstream list; for the file dnstt-cli
+wrote, its copy), on Windows from the interface of the default route. In `tun` the
+tunnel's own DNS address is left out of it (E2). The name of a DoH or DoT server goes in
+clear anyway, in the TLS SNI.
 
 Health, per resolver: three failures in a row (a failed handshake, a session that died
 by itself within a minute) put it aside for 1 min, doubling up to 16 min; a session that
@@ -516,6 +524,8 @@ resolvers    = [
   "dot:dot.example:853@192.0.2.2",
   "udp:192.0.2.53:53",
 ]
+bootstrap    = []                               # plain DNS by address for resolver names;
+                                                # empty — the network's DNS (the ISP's)
 utls         = ""                               # empty — upstream default distribution
 datapath     = "tun"                            # tun | socks
 kill_switch  = true                             # tun: traffic closed while the tunnel is down

@@ -310,8 +310,14 @@ pins for its own host, the fallback for anything else. The bootstrap resolver
 (`Bootstrap`, from the tunnel DNS resolver of csqtt-cli) asks A, then AAAA if there is no
 A, over its own UDP sockets through `Control`, TCP after a truncated answer; a silent server
 is passed over after 2 s, two rounds; NXDOMAIN and "no addresses" are final; answers are
-kept up to their TTL, at most 5 min, `Forget` drops them. Its servers: the profile's UDP
-resolvers given by address, then 1.1.1.1, 8.8.8.8 and 9.9.9.9 (`BootstrapServers`). Health
+kept up to their TTL, at most 5 min, `Forget` drops them. Its servers
+(`BootstrapServers`, read again on every lookup that is not cached): the profile's own
+`bootstrap` (`ParseBootstrap`, plain DNS by address) and only them, or else the DNS the
+network gave the system — the ISP's resolver, which answers in a network with a whitelist
+of resolvers (`linuxsys.NetworkDNS`: resolv.conf, the servers behind the
+systemd-resolved stub, the copy of our own file; `winsys.NetworkDNS`: the interface of the
+default route) — then the profile's UDP resolvers by address. No public resolver is asked
+unasked. Health
 (`Pool`): three failures in a row — a failed handshake or a session that died by itself
 within a minute — put a resolver aside for 1 min, then 2, 4… up to 16; a session that
 lived a minute clears its record; `Next` goes down the list past the resolvers aside, and
@@ -373,7 +379,8 @@ session. From csqtt-cli `socks5.go` (server protocol) where it fits.
 ### S6. Profiles and secrets — `internal/config`
 
 `profiles.toml` schema of §10, validation (unknown keys and secrets in the TOML are
-errors), the exit password in the secret store; `Save` with its ownership tests under sudo
+errors; `resolvers` through `resolvers.Expand`, `bootstrap` through
+`resolvers.ParseBootstrap`), the exit password in the secret store; `Save` with its ownership tests under sudo
 (left out of E0).
 
 **Done when** load, save, validation and secret tests pass on Linux and Windows.

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"io"
 	"log"
-	"net/netip"
 	"os"
 	"strconv"
 	"testing"
@@ -39,7 +38,7 @@ func TestSessionThroughName(t *testing.T) {
 	t.Cleanup(func() { ts.Close() })
 	port := strconv.Itoa(ts.Addr.Port)
 	srv := startDNS(t)
-	boot := NewBootstrap([]netip.AddrPort{srv.addr}, nil)
+	boot := NewBootstrap(fixed(srv.addr), nil)
 
 	for _, tc := range []struct {
 		entry   string

@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,39 +27,69 @@ import (
 // truncated answer is asked again over TCP. Taken from the tunnel DNS resolver of
 // csqtt-cli (MIT), with AAAA and a socket hook.
 
-// DefaultBootstrap are the servers the bootstrap resolver asks after the profile's own:
-// public resolvers by address.
-var DefaultBootstrap = []netip.AddrPort{
-	netip.MustParseAddrPort("1.1.1.1:53"),
-	netip.MustParseAddrPort("8.8.8.8:53"),
-	netip.MustParseAddrPort("9.9.9.9:53"),
-}
+// Where the bootstrap resolver asks, in order: the profile's own servers (bootstrap = […]),
+// and only them, if it has any; otherwise the DNS servers the network gave the system — the
+// ISP's resolver, which answers in a network that lets through only some resolvers — then
+// the plain UDP resolvers of the list given by address. Public resolvers abroad are never
+// asked unasked: in such a network they do not answer, and every attempt is a timeout.
 
-// BootstrapServers are the servers to resolve the names of list with: the plain UDP
-// resolvers of the list given by address — the profile's owner knows they answer in this
-// network — then DefaultBootstrap.
-func BootstrapServers(list []Resolver) []netip.AddrPort {
+// BootstrapServers are the servers to resolve the names of list with: own if there are
+// any; otherwise network (port 53) and then the UDP resolvers of list given by address.
+func BootstrapServers(own []netip.AddrPort, network []netip.Addr, list []Resolver) []netip.AddrPort {
 	var servers []netip.AddrPort
 	add := func(s netip.AddrPort) {
-		for _, x := range servers {
-			if x == s {
-				return
-			}
+		s = netip.AddrPortFrom(s.Addr().Unmap(), s.Port())
+		if !slices.Contains(servers, s) {
+			servers = append(servers, s)
 		}
-		servers = append(servers, s)
+	}
+	if len(own) > 0 {
+		for _, s := range own {
+			add(s)
+		}
+		return servers
+	}
+	for _, a := range network {
+		add(netip.AddrPortFrom(a, 53))
 	}
 	for _, r := range list {
 		if r.Transport != client.UDP {
 			continue
 		}
 		if s, err := netip.ParseAddrPort(r.Address); err == nil {
-			add(netip.AddrPortFrom(s.Addr().Unmap(), s.Port()))
+			add(s)
 		}
 	}
-	for _, s := range DefaultBootstrap {
-		add(s)
-	}
 	return servers
+}
+
+// ParseBootstrap reads the bootstrap servers of a profile: plain DNS by address,
+// udp:address[:port] or address[:port] (53 by default). A host name is refused: it would
+// need a bootstrap of its own.
+func ParseBootstrap(entries []string) ([]netip.AddrPort, error) {
+	var servers []netip.AddrPort
+	var errs []error
+	for _, e := range entries {
+		entry := strings.TrimSpace(e)
+		if !strings.HasPrefix(strings.ToLower(entry), "udp:") {
+			entry = "udp:" + entry
+		}
+		r, err := parse(entry)
+		var s netip.AddrPort
+		if err == nil {
+			if s, err = netip.ParseAddrPort(r.Address); err != nil || len(r.Pins) > 0 {
+				err = errors.New("a bootstrap server is given by its address")
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("bootstrap %q: %w", e, err))
+			continue
+		}
+		if !slices.Contains(servers, s) {
+			servers = append(servers, s)
+		}
+	}
+	return servers, errors.Join(errs...)
 }
 
 // Errors of a lookup that another server would answer the same way.
@@ -83,7 +114,7 @@ const (
 
 // Bootstrap is the bootstrap resolver: LookupIP is the fallback of Resolver.LookupIP.
 type Bootstrap struct {
-	servers []netip.AddrPort
+	servers func() []netip.AddrPort
 	control func(network, address string, c syscall.RawConn) error
 	timeout time.Duration
 	now     func() time.Time
@@ -97,11 +128,13 @@ type cached struct {
 	expires time.Time
 }
 
-// NewBootstrap asks servers in turn; control is put on every socket (netguard), nil leaves
-// them as they are.
-func NewBootstrap(servers []netip.AddrPort, control func(network, address string, c syscall.RawConn) error) *Bootstrap {
+// NewBootstrap asks the servers that servers returns, in turn; it is called on every lookup
+// that is not in the cache, so the DNS of a new network is taken up without a restart
+// (BootstrapServers over the system's DNS of the moment). control is put on every socket
+// (netguard), nil leaves them as they are.
+func NewBootstrap(servers func() []netip.AddrPort, control func(network, address string, c syscall.RawConn) error) *Bootstrap {
 	return &Bootstrap{
-		servers: append([]netip.AddrPort(nil), servers...),
+		servers: servers,
 		control: control,
 		timeout: bootstrapTimeout,
 		now:     time.Now,
@@ -128,8 +161,10 @@ func (b *Bootstrap) LookupIP(ctx context.Context, host string) ([]netip.Addr, er
 	if ok && b.now().Before(c.expires) {
 		return append([]netip.Addr(nil), c.addrs...), nil
 	}
-	if len(b.servers) == 0 {
-		return nil, errors.New("bootstrap resolver: no servers")
+	servers := b.servers()
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("bootstrap resolver: no servers to resolve %s with: the network gave the "+
+			"system no DNS; pin the resolver's address (@address) or set bootstrap in the profile", key)
 	}
 	name, err := dnsmessage.NewName(key + ".")
 	if key == "" || err != nil {
@@ -138,7 +173,7 @@ func (b *Bootstrap) LookupIP(ctx context.Context, host string) ([]netip.Addr, er
 
 	var errs []error
 	for range bootstrapRounds {
-		for _, server := range b.servers {
+		for _, server := range servers {
 			addrs, ttl, err := b.ask(ctx, server, name, dnsmessage.TypeA)
 			if errors.Is(err, ErrNoAddress) {
 				addrs, ttl, err = b.ask(ctx, server, name, dnsmessage.TypeAAAA)

@@ -202,7 +202,7 @@ func TestBootstrap(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}
-	b := NewBootstrap([]netip.AddrPort{srv.addr}, control)
+	b := NewBootstrap(fixed(srv.addr), control)
 	ctx := lookupCtx(t)
 
 	for _, tc := range []struct {
@@ -268,7 +268,7 @@ func TestBootstrap(t *testing.T) {
 // A silent server is passed over for the next one; the answer is kept until its TTL.
 func TestBootstrapFailover(t *testing.T) {
 	srv := startDNS(t)
-	b := NewBootstrap([]netip.AddrPort{silentServer(t), srv.addr}, nil)
+	b := NewBootstrap(fixed(silentServer(t), srv.addr), nil)
 	b.timeout = 100 * time.Millisecond
 	now := time.Unix(1000000, 0)
 	b.now = func() time.Time { return now }
@@ -295,7 +295,7 @@ func TestBootstrapFailover(t *testing.T) {
 
 // Only silent servers: an error after every round, and ctx stops the wait.
 func TestBootstrapNoAnswer(t *testing.T) {
-	b := NewBootstrap([]netip.AddrPort{silentServer(t), silentServer(t)}, nil)
+	b := NewBootstrap(fixed(silentServer(t), silentServer(t)), nil)
 	b.timeout = 50 * time.Millisecond
 	start := time.Now()
 	_, err := b.LookupIP(lookupCtx(t), "a.example")
@@ -316,9 +316,22 @@ func TestBootstrapNoAnswer(t *testing.T) {
 		t.Errorf("cancelled: %v", err)
 	}
 
-	if _, err := NewBootstrap(nil, nil).LookupIP(lookupCtx(t), "a.example"); err == nil {
-		t.Error("no servers: no error")
+	_, err = NewBootstrap(fixed(), nil).LookupIP(lookupCtx(t), "a.example")
+	if err == nil || !strings.Contains(err.Error(), "bootstrap in the profile") {
+		t.Errorf("no servers: %v", err)
 	}
+}
+
+func fixed(servers ...netip.AddrPort) func() []netip.AddrPort {
+	return func() []netip.AddrPort { return servers }
+}
+
+func ap(s ...string) []netip.AddrPort {
+	var out []netip.AddrPort
+	for _, x := range s {
+		out = append(out, netip.MustParseAddrPort(x))
+	}
+	return out
 }
 
 func TestBootstrapServers(t *testing.T) {
@@ -326,12 +339,48 @@ func TestBootstrapServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := BootstrapServers(list)
-	want := append([]netip.AddrPort{
-		netip.MustParseAddrPort("192.0.2.53:53"),
-		netip.MustParseAddrPort("192.0.2.55:5353"),
-	}, DefaultBootstrap...)
-	if !slices.Equal(got, want) {
+	network := addrs("198.51.100.53", "2001:db8::53", "192.0.2.53")
+	for _, tc := range []struct {
+		name    string
+		own     []netip.AddrPort
+		network []netip.Addr
+		want    []netip.AddrPort
+	}{
+		// The network's DNS first, then the UDP resolvers of the list by address.
+		{"default", nil, network,
+			ap("198.51.100.53:53", "[2001:db8::53]:53", "192.0.2.53:53", "192.0.2.55:5353")},
+		{"no network DNS", nil, nil, ap("192.0.2.53:53", "192.0.2.55:5353")},
+		// Own servers replace everything else.
+		{"own", ap("203.0.113.53:53", "[::ffff:203.0.113.54]:5353"), network,
+			ap("203.0.113.53:53", "203.0.113.54:5353")},
+	} {
+		got := BootstrapServers(tc.own, tc.network, list)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// No public resolver comes from nowhere.
+	if got := BootstrapServers(nil, nil, nil); len(got) != 0 {
+		t.Errorf("empty profile: %v", got)
+	}
+}
+
+func TestParseBootstrap(t *testing.T) {
+	got, err := ParseBootstrap([]string{"udp:192.0.2.53", "198.51.100.53:5353", " [2001:db8::53] ", "UDP:192.0.2.53:53"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := ap("192.0.2.53:53", "198.51.100.53:5353", "[2001:db8::53]:53"); !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+	_, err = ParseBootstrap([]string{"dns.example", "udp:dns.example@192.0.2.1", "doh:https://doh.example/q", "192.0.2.1:0"})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, want := range []string{`"dns.example": a bootstrap server is given by its address`,
+		`"udp:dns.example@192.0.2.1": a bootstrap server`, `"doh:https://doh.example/q"`, `"192.0.2.1:0": bad port`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
 	}
 }
