@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,11 @@ type Options struct {
 	// Bootstrap resolves the host names of resolvers that are not pinned; nil — such a
 	// resolver fails its dial.
 	Bootstrap *resolvers.Bootstrap
+	// NetworkDNS gives the DNS servers the network gives the system now
+	// (linuxsys.NetworkDNS, winsys.NetworkDNS), for the entry "network"
+	// (resolvers.NetworkEntry); every dial through it reads them again, so a new network
+	// is taken up by itself. nil — the entry fails its dial.
+	NetworkDNS func() ([]netip.Addr, error)
 	// CheckExit checks the exit through a new session before it counts as connected
 	// (exit.SOCKS5.Check). A login refusal (exit.IsLogin) and an exit that is not
 	// SOCKS5 (exit.ErrNotSOCKS5) stop the tunnel; any other error is a retry. nil — no
@@ -122,8 +128,12 @@ type Tunnel struct {
 	sleep func(ctx context.Context, d time.Duration) bool
 	now   func() time.Time
 
-	backoff backoff // the Run goroutine only
-	running atomic.Bool
+	backoff     backoff // the Run goroutine only
+	networkTurn int     // the next of the network's DNS servers; the Run goroutine only
+	// networkCount is how many DNS servers the network gave at the last read; the Run
+	// goroutine only.
+	networkCount int
+	running      atomic.Bool
 
 	// restart is a request of Restart not carried out yet. One is enough: a restart asked
 	// for twice is still one.
@@ -272,7 +282,7 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 		t.set(StateDialing, r.Name(), nil, 0)
 
 		wctx, unwatch := t.watchRestart(ctx)
-		s, took, err := t.dialOnce(wctx, r)
+		s, name, took, err := t.dialOnce(wctx, r)
 		if err == nil {
 			heard = true
 			err = t.checkExit(wctx, s)
@@ -290,9 +300,9 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 		case s == nil:
 			// The dial failed: the next resolver at once, a delay after a full round.
 			pool.HandshakeFailed(i)
-			round = append(round, ResolverFailure{r.Name(), err})
-			t.logf("%s: %v", r.Name(), err)
-			if len(round) < pool.Len() {
+			round = append(round, ResolverFailure{name, err})
+			t.logf("%s: %v", name, err)
+			if len(round) < t.roundSize() {
 				continue
 			}
 			if !heard {
@@ -300,7 +310,7 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			}
 			round = nil
 			cause := fmt.Errorf("no resolver of %d completed a handshake", pool.Len())
-			if t.pause(ctx, r, cause, t.backoff.next()) {
+			if t.pause(ctx, name, cause, t.backoff.next()) {
 				prev = -1
 			}
 			continue
@@ -312,14 +322,14 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 				return err
 			}
 			prev = i - 1 // the same resolver first: it is not to blame
-			if t.pause(ctx, r, err, t.backoff.next()) {
+			if t.pause(ctx, name, err, t.backoff.next()) {
 				prev = -1
 			}
 			continue
 		}
 
 		round = nil
-		end := t.serve(ctx, r, s, took)
+		end := t.serve(ctx, name, s, took)
 		switch {
 		case end.stop:
 			t.beginStop()
@@ -328,7 +338,7 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			return nil
 		case end.restarted:
 			s.Close()
-			t.set(StateReconnecting, r.Name(), end.reason, 0)
+			t.set(StateReconnecting, name, end.reason, 0)
 			t.restarted(end.reason)
 			prev = -1
 		default:
@@ -341,15 +351,25 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 				delay = t.backoff.next()
 			}
 			prev = i - 1 // the same resolver first, unless it is put aside now
-			if t.pause(ctx, r, end.reason, delay) {
+			if t.pause(ctx, name, end.reason, delay) {
 				prev = -1
 			}
 		}
 	}
 }
 
-// dialOnce dials a session through r and waits for its handshake.
-func (t *Tunnel) dialOnce(ctx context.Context, r resolvers.Resolver) (Session, time.Duration, error) {
+// dialOnce dials a session through r and waits for its handshake. name is how the
+// resolver is shown: its Name, and for the network entry with the server dialed.
+func (t *Tunnel) dialOnce(ctx context.Context, r resolvers.Resolver) (s Session, name string, took time.Duration, err error) {
+	name = r.Name()
+	if r.Network {
+		var server netip.Addr
+		if server, err = t.networkServer(); err != nil {
+			return nil, name, 0, err
+		}
+		r = resolvers.NetworkResolver(server)
+		name = fmt.Sprintf("%s (%s)", resolvers.NetworkEntry, server)
+	}
 	cfg := t.opts.Session
 	cfg.Resolver = r.Core()
 	var fallback resolvers.LookupFunc
@@ -361,15 +381,47 @@ func (t *Tunnel) dialOnce(ctx context.Context, r resolvers.Resolver) (Session, t
 	hctx, cancel := context.WithTimeout(ctx, t.opts.HandshakeTimeout)
 	defer cancel()
 	start := t.now()
-	s, err := t.dial(hctx, cfg)
-	took := t.now().Sub(start)
+	s, err = t.dial(hctx, cfg)
+	took = t.now().Sub(start)
 	if err != nil {
 		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 			err = fmt.Errorf("no answer from the server within %v", t.opts.HandshakeTimeout)
 		}
-		return nil, took, err
+		return nil, name, took, err
 	}
-	return s, took, nil
+	return s, name, took, nil
+}
+
+// networkServer is the server for the next dial through the network entry: the network's
+// DNS servers in turn, one per dial, so that a second server is tried when the first fails.
+func (t *Tunnel) networkServer() (netip.Addr, error) {
+	if t.opts.NetworkDNS == nil {
+		return netip.Addr{}, errors.New("the network's DNS cannot be read here")
+	}
+	servers, err := t.opts.NetworkDNS()
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("the network's DNS: %w", err)
+	}
+	if len(servers) == 0 {
+		return netip.Addr{}, errors.New("the network gave the system no DNS server")
+	}
+	t.networkCount = len(servers)
+	server := servers[t.networkTurn%len(servers)]
+	t.networkTurn++
+	return server, nil
+}
+
+// roundSize is how many failed dials in a row make a full round: one per resolver, and for
+// the network entry one per server the network gave at the last read.
+func (t *Tunnel) roundSize() int {
+	pool := t.opts.Resolvers
+	n := pool.Len()
+	for i := range n {
+		if pool.Resolver(i).Network {
+			n += max(t.networkCount, 1) - 1
+		}
+	}
+	return n
 }
 
 // checkExit checks the exit through s (Options.CheckExit).
@@ -391,14 +443,14 @@ type end struct {
 
 // serve publishes s for OpenStream and watches it until it dies, Restart or the end of
 // ctx, moving between StateConnected and StateDegraded on the data from the server.
-func (t *Tunnel) serve(ctx context.Context, r resolvers.Resolver, s Session, took time.Duration) end {
+func (t *Tunnel) serve(ctx context.Context, name string, s Session, took time.Duration) end {
 	l := &live{s: s, ended: make(chan struct{})}
 	start := t.now()
 	t.mu.Lock()
 	t.live, t.since, t.handshake = l, start, took
 	close(t.ready)
 	t.mu.Unlock()
-	t.set(StateConnected, r.Name(), nil, 0)
+	t.set(StateConnected, name, nil, 0)
 	defer func() {
 		t.mu.Lock()
 		t.live = nil
@@ -429,10 +481,10 @@ func (t *Tunnel) serve(ctx context.Context, r resolvers.Resolver, s Session, too
 			if n := s.Stats().BytesReceived; n != received {
 				received, heardAt = n, now
 				if t.State() == StateDegraded {
-					t.set(StateConnected, r.Name(), nil, 0)
+					t.set(StateConnected, name, nil, 0)
 				}
 			} else if now.Sub(heardAt) >= t.opts.DegradedAfter && t.State() == StateConnected {
-				t.set(StateDegraded, r.Name(), ErrNoData, 0)
+				t.set(StateDegraded, name, ErrNoData, 0)
 			}
 		}
 	}
@@ -440,10 +492,10 @@ func (t *Tunnel) serve(ctx context.Context, r resolvers.Resolver, s Session, too
 
 // pause waits delay before the next attempt in StateReconnecting. Restart cuts it short;
 // then it clears the backoff and the health and reports true.
-func (t *Tunnel) pause(ctx context.Context, r resolvers.Resolver, cause error, delay time.Duration) bool {
-	t.set(StateReconnecting, r.Name(), cause, delay)
+func (t *Tunnel) pause(ctx context.Context, name string, cause error, delay time.Duration) bool {
+	t.set(StateReconnecting, name, cause, delay)
 	if cause != nil {
-		t.logf("%s: %v", r.Name(), cause)
+		t.logf("%s: %v", name, cause)
 	}
 	wctx, unwatch := t.watchRestart(ctx)
 	t.sleep(wctx, delay)

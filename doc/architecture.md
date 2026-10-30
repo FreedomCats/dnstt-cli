@@ -116,12 +116,17 @@ and gives a `Control` function; the core puts it on every socket it creates (§0
 In UDP mode the core itself sends queries to port 53 — without the mark DNS protection
 would kill the tunnel.
 
-### R5. Resolvers: a list, DoH by default, no system DNS
+### R5. Resolvers: a list, the network's DNS by default, no system resolver
 
-A profile has a list of resolvers, each `doh:URL`, `dot:host:port`, `udp:host:port` or
-`tcp:host:port` (plain DNS over TCP, P6). DoH is the default for new profiles and for the
-built-in presets; all four are supported. The list is tried in order; a resolver that fails the handshake or kills
-sessions repeatedly is put aside for a while, and the session moves to the next one.
+dnstt-cli is meant for networks that let through only some resolvers (a whitelist: often
+only the national ones and the ISP's). A profile has a list of resolvers the user enters,
+each `doh:URL`, `dot:host:port`, `udp:host:port`, `tcp:host:port` (plain DNS over TCP, P6),
+a built-in preset, or `network` — plain DNS over UDP to the DNS server the network gives
+the system at the moment of each dial, the ISP's resolver. `network` is the default when
+the user enters nothing; it is kept in the profile as the word, not as an address, so it
+follows the user from network to network. The list is tried in order; a resolver that
+fails the handshake or kills sessions repeatedly is put aside for a while, and the session
+moves to the next one; for `network`, each of the network's servers in turn.
 
 A host name in a resolver is resolved without the system: a `@address` suffix pins the
 address (`doh:https://doh.example/dns-query@192.0.2.1`, like `curl --resolve`; several
@@ -519,10 +524,11 @@ default_profile = "home"
 [profile.home]
 domain       = "t.example.com"
 pubkey       = "<64 hex digits>"                # server's Noise public key
-resolvers    = [
+resolvers    = [                               # empty in the wizard — ["network"]
+  "udp:192.0.2.53:53",
   "doh:https://doh.example/dns-query@192.0.2.1",
   "dot:dot.example:853@192.0.2.2",
-  "udp:192.0.2.53:53",
+  "network",                                    # the network's DNS (the ISP's) at each dial
 ]
 bootstrap    = []                               # plain DNS by address for resolver names;
                                                 # empty — the network's DNS (the ISP's)
@@ -602,13 +608,16 @@ From csqtt-cli: the menu has no logic of its own, it calls the same code as the 
   list.
 - **No profile yet** — the wizard: paste a `slipnet://` link (hidden input: it holds the
   exit password) or answer questions — profile name (Enter — `home`), tunnel domain, server
-  key, exit type, exit login and password (hidden, twice), resolvers (DoH presets offered
-  first, own ones possible), then the mode: all traffic (`tun`, Enter, where supported) or
-  only programs with the proxy (`socks`). End of input on any question cancels without
-  writing.
+  key, exit type, exit login and password (hidden, twice), resolvers — the servers to
+  connect through, one or several, entered by the user (Enter without any — `network`, the
+  network's DNS; presets by name for those who want them), then the mode: all traffic
+  (`tun`, Enter, where supported) or only programs with the proxy (`socks`). End of input
+  on any question cancels without writing.
 - **Privileges.** `tun` without root: the menu re-runs one connection through `sudo` in the
   same terminal on Linux, through UAC in a new window on Windows. No way to get them (no
   `sudo`, a non-admin Windows account) — `socks` for this time.
+- **Connect** shows the resolvers saved in the profile and offers to connect with them
+  (Enter) or to change them first; the changed list is saved to the profile.
 - **Menu items.** Connect; check resolvers (drops dead ones on request); edit resolvers;
   new exit password; change domain or key; another profile; delete profile; `0` — exit.
 - **When resolvers run out mid-session** (none completes a handshake for a full round),
@@ -684,7 +693,7 @@ modes of `slipnet://`); export of `slipnet://`.
 
 | Risk | Likelihood | What we do |
 |---|---|---|
-| The DNS tunnel is recognised and the resolver blocked | high | resolver list with failover; DoH with uTLS by default; `resolvers check` |
+| The DNS tunnel is recognised and the resolver blocked | high | resolver list with failover; DoH and DoT with uTLS where they pass; `resolvers check` |
 | Public DoH and DoT closed in the user's network | high | UDP mode through the ISP resolver; a socket per query (P3) |
 | The narrow channel cannot carry all system traffic | high | `socks` as a full mode; lists past the tunnel later |
 | No UDP for apps (calls, games) | medium | said plainly in README; fast rejection for QUIC |

@@ -165,7 +165,7 @@ func TestExpand(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	for _, want := range []string{`"doh-cloudfare": no such preset (doh-cloudflare,`, `"udp:bad host"`} {
+	for _, want := range []string{`"doh-cloudfare": not network, no such preset (doh-cloudflare,`, `"udp:bad host"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not say %q", err, want)
 		}
@@ -219,5 +219,36 @@ func TestCore(t *testing.T) {
 	}
 	if r.Host() != "dot.example" {
 		t.Errorf("Host() = %q", r.Host())
+	}
+}
+
+// The network entry is kept as a word, not as an address: in another network it stands
+// for another server.
+func TestNetworkEntry(t *testing.T) {
+	list, err := Expand([]string{"network", "udp:192.0.2.53", " NETWORK "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || !list[0].Network || list[1].Network {
+		t.Fatalf("got %+v", list)
+	}
+	if list[0].String() != NetworkEntry || list[0].Name() != NetworkEntry {
+		t.Errorf("String %q, Name %q", list[0].String(), list[0].Name())
+	}
+	r := NetworkResolver(netip.MustParseAddr("::ffff:198.51.100.53"))
+	if r.String() != "udp:198.51.100.53:53" || r.Network {
+		t.Errorf("NetworkResolver: %+v", r)
+	}
+	if r := NetworkResolver(netip.MustParseAddr("2001:db8::53")); r.String() != "udp:[2001:db8::53]:53" {
+		t.Errorf("NetworkResolver: %v", r)
+	}
+	// A typo names the word among the choices.
+	if _, err := Expand([]string{"netwrok"}); err == nil || !strings.Contains(err.Error(), "not network") {
+		t.Errorf("typo: %v", err)
+	}
+	// The network entry is not a bootstrap server by itself: BootstrapServers takes the
+	// network's DNS from its caller.
+	if got := BootstrapServers(nil, nil, list); len(got) != 1 || got[0].String() != "192.0.2.53:53" {
+		t.Errorf("BootstrapServers: %v", got)
 	}
 }

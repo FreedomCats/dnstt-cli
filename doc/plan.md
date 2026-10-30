@@ -317,7 +317,9 @@ network gave the system — the ISP's resolver, which answers in a network with 
 of resolvers (`linuxsys.NetworkDNS`: resolv.conf, the servers behind the
 systemd-resolved stub, the copy of our own file; `winsys.NetworkDNS`: the interface of the
 default route) — then the profile's UDP resolvers by address. No public resolver is asked
-unasked. Health
+unasked. The entry `network` (`resolvers.NetworkEntry`, the default of a new profile) is the
+DNS the network gives the system at each dial: the supervisor reads it through
+`Options.NetworkDNS` and dials its servers one per dial, each counted in a full round. Health
 (`Pool`): three failures in a row — a failed handshake or a session that died by itself
 within a minute — put a resolver aside for 1 min, then 2, 4… up to 16; a session that
 lived a minute clears its record; `Next` goes down the list past the resolvers aside, and
@@ -379,8 +381,8 @@ session. From csqtt-cli `socks5.go` (server protocol) where it fits.
 ### S6. Profiles and secrets — `internal/config`
 
 `profiles.toml` schema of §10, validation (unknown keys and secrets in the TOML are
-errors; `resolvers` through `resolvers.Expand`, `bootstrap` through
-`resolvers.ParseBootstrap`), the exit password in the secret store; `Save` with its ownership tests under sudo
+errors; `resolvers` through `resolvers.Expand`, `["network"]` when empty, `bootstrap`
+through `resolvers.ParseBootstrap`), the exit password in the secret store; `Save` with its ownership tests under sudo
 (left out of E0).
 
 **Done when** load, save, validation and secret tests pass on Linux and Windows.

@@ -29,6 +29,22 @@ type Resolver struct {
 	Pins []netip.Addr
 	// Preset is the name of the preset the entry came from; "" for an entry of its own.
 	Preset string
+	// Network marks the entry "network": plain DNS over UDP to the DNS server the network
+	// gives the system at the moment of a dial, the ISP's resolver. Transport, Address and
+	// Pins are empty; NetworkResolver gives the resolver for one of the
+	// servers.
+	Network bool
+}
+
+// NetworkEntry is the entry of the network's DNS (Resolver.Network): the default of a new
+// profile. The address is not written into the profile, because it is another one in
+// every network.
+const NetworkEntry = "network"
+
+// NetworkResolver is the resolver the network entry stands for when the network's DNS
+// server is server: plain DNS over UDP to it, port 53.
+func NetworkResolver(server netip.Addr) Resolver {
+	return Resolver{Transport: client.UDP, Address: netip.AddrPortFrom(server.Unmap(), 53).String()}
 }
 
 // Core is the resolver for core.Config.
@@ -52,6 +68,9 @@ func (r Resolver) Host() string {
 // String is the entry as it is written in a profile, the port always given; Parse reads it
 // back to the same Resolver (without Preset).
 func (r Resolver) String() string {
+	if r.Network {
+		return NetworkEntry
+	}
 	s := string(r.Transport) + ":" + r.Address
 	for i, a := range r.Pins {
 		if i == 0 {

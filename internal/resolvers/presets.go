@@ -39,16 +39,20 @@ func Preset(name string) (Resolver, bool) {
 	return Resolver{}, false
 }
 
-// Expand reads the resolvers of a profile: entries and preset names, in the order given.
+// Expand reads the resolvers of a profile: entries, preset names and NetworkEntry, in the
+// order given.
 // A resolver given twice stays at its first place.
 func Expand(entries []string) ([]Resolver, error) {
 	var list []Resolver
 	var errs []error
 	for _, e := range entries {
 		r, ok := Preset(strings.TrimSpace(e))
+		if !ok && strings.EqualFold(strings.TrimSpace(e), NetworkEntry) {
+			r, ok = Resolver{Network: true}, true
+		}
 		if !ok && !strings.Contains(e, ":") {
-			errs = append(errs, fmt.Errorf("resolver %q: no such preset (%s) and no transport (doh:, dot:, udp:)",
-				e, strings.Join(presetNames(), ", ")))
+			errs = append(errs, fmt.Errorf("resolver %q: not %s, no such preset (%s) and no transport (doh:, dot:, udp:)",
+				e, NetworkEntry, strings.Join(presetNames(), ", ")))
 			continue
 		}
 		if !ok {

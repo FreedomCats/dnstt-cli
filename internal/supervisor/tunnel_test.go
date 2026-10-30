@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -443,5 +444,90 @@ func TestNewWithoutResolvers(t *testing.T) {
 	}
 	if _, err := New(Options{Resolvers: resolvers.NewPool(nil)}); err == nil {
 		t.Error("no error for an empty pool")
+	}
+}
+
+// The network entry dials the network's DNS servers read at each dial, one server per
+// dial, and a full round counts each of them.
+func TestNetworkEntry(t *testing.T) {
+	var servers atomic.Pointer[[]netip.Addr]
+	set := func(s ...string) {
+		var a []netip.Addr
+		for _, x := range s {
+			a = append(a, netip.MustParseAddr(x))
+		}
+		servers.Store(&a)
+	}
+	set("198.51.100.1", "198.51.100.2")
+	h := newHarness(t, []string{"network", r2}, func(o *Options) {
+		o.NetworkDNS = func() ([]netip.Addr, error) { return *servers.Load(), nil }
+	})
+	h.dial = func(r string, n int) error {
+		if r == "udp:203.0.113.1:53" {
+			return nil
+		}
+		return errDial
+	}
+	h.run(context.Background())
+	var err error
+	select {
+	case err = <-h.result:
+		h.result <- err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+	var ne *NeverConnectedError
+	if !errors.As(err, &ne) {
+		t.Fatalf("got %v", err)
+	}
+	want := []string{"udp:198.51.100.1:53", r2, "udp:198.51.100.2:53"}
+	if got := h.dialList(); !slices.Equal(got, want) {
+		t.Errorf("dials %q, want %q", got, want)
+	}
+	if !strings.Contains(err.Error(), "network (198.51.100.2)") {
+		t.Errorf("%q does not name the server of the network entry", err)
+	}
+
+	// Another network: the entry follows it.
+	set("203.0.113.1")
+	h2 := newHarness(t, []string{"network"}, func(o *Options) {
+		o.NetworkDNS = func() ([]netip.Addr, error) { return *servers.Load(), nil }
+	})
+	h2.dial = h.dial
+	h2.run(context.Background())
+	if tr := h2.waitState(StateConnected, 1); tr.Resolver != "network (203.0.113.1)" {
+		t.Errorf("connected through %q", tr.Resolver)
+	}
+}
+
+// Without a way to read the network's DNS, or with none given, the entry fails its dial
+// with a reason.
+func TestNetworkEntryNoDNS(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dns  func() ([]netip.Addr, error)
+		want string
+	}{
+		{"no reader", nil, "cannot be read"},
+		{"none", func() ([]netip.Addr, error) { return nil, nil }, "no DNS server"},
+		{"error", func() ([]netip.Addr, error) { return nil, errors.New("resolv.conf: missing") }, "resolv.conf: missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, []string{"network"}, func(o *Options) { o.NetworkDNS = tc.dns })
+			h.run(context.Background())
+			var err error
+			select {
+			case err = <-h.result:
+				h.result <- err
+			case <-time.After(10 * time.Second):
+				t.Fatal("Run did not stop")
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v", err)
+			}
+			if got := h.dialList(); len(got) != 0 {
+				t.Errorf("dialed %q", got)
+			}
+		})
 	}
 }
