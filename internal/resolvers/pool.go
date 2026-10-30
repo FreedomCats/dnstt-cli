@@ -5,17 +5,18 @@ import (
 	"time"
 )
 
+// ShortSession: a session that died by itself sooner counts against its resolver; one that
+// lived longer proves the resolver and clears its record.
+const ShortSession = time.Minute
+
 // Health of the resolvers (architecture.md R5, §08): a resolver that fails the handshake
 // or kills sessions repeatedly is put aside for a while, and the supervisor dials the next
 // one.
 
 const (
 	// strikesToAside is how many failures in a row put a resolver aside: a failed
-	// handshake, or a session that died by itself within shortSession.
+	// handshake, or a session that died by itself within ShortSession.
 	strikesToAside = 3
-	// shortSession: a session that died sooner counts against its resolver; one that
-	// lived longer proves the resolver and clears its record.
-	shortSession = time.Minute
 	// asideFirst is the first time aside; every next one doubles, up to asideMax.
 	asideFirst = time.Minute
 	asideMax   = 16 * time.Minute
@@ -98,7 +99,7 @@ func (p *Pool) HandshakeFailed(i int) {
 func (p *Pool) SessionEnded(i int, lived time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if lived < shortSession {
+	if lived < ShortSession {
 		p.strike(i)
 		return
 	}

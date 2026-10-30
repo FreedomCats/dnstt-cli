@@ -60,7 +60,8 @@ func TestThroughTunnel(t *testing.T) {
 		names:    map[string]string{"echo.example.com": echoServer(t)},
 	}
 	s := tunnel(t, srv)
-	d := &SOCKS5{Open: s.OpenStream, User: "user", Password: "secret"}
+	open := func(context.Context) (net.Conn, error) { return s.OpenStream() }
+	d := &SOCKS5{Open: open, User: "user", Password: "secret"}
 
 	if err := d.Check(dialCtx(t)); err != nil {
 		t.Fatalf("Check: %v", err)
@@ -86,7 +87,7 @@ func TestThroughTunnel(t *testing.T) {
 	}
 	echo(t, conn, []byte("after the refusal"))
 
-	bad := &SOCKS5{Open: s.OpenStream, User: "user", Password: "wrong"}
+	bad := &SOCKS5{Open: open, User: "user", Password: "wrong"}
 	if err := bad.Check(dialCtx(t)); !IsLogin(err) {
 		t.Fatalf("wrong password: %v, want a login error", err)
 	}

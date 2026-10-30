@@ -1,6 +1,7 @@
 package exit
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
@@ -42,7 +43,7 @@ func (s *socksServer) events() []string {
 
 // pipe is an OpenStream that serves every stream in memory.
 func (s *socksServer) pipe() OpenStream {
-	return func() (net.Conn, error) {
+	return func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go s.serve(server)
 		return client, nil

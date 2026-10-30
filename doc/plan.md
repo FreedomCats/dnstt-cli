@@ -25,8 +25,8 @@ E0 foundation ──▶ E1 socks ──▶ E2 Linux tun ──▶ E3 Windows tun
 
 - Done: rules (`AGENTS.md`), `doc/analysis.md`, `doc/architecture.md`, this plan; stage
   E0 (results below, under "E0. Foundation").
-- E1: S1 (core patches P2–P5), S2 (exit) and S3 (resolvers) done, results under each.
-  Next: S4 (supervisor); S0 (the user's test server) when the user has one: the server's
+- E1: S1 (core patches P2–P5), S2 (exit), S3 (resolvers) and S4 (supervisor) done,
+  results under each. Next: S5 (`socks` datapath); S0 (the user's test server) when the user has one: the server's
   values are asked for in chat and kept only in `doc/local/plan-e1.md`.
 - CI is green on `main` (`linux`: test, netns, core; `windows`: test, core).
 - A new session first sets up the workspace as in F0: the mirror as `../dnstt` and
@@ -275,7 +275,7 @@ passes.
 ### S2. Exit — `internal/exit` — done
 
 **Result.** `exit.Dialer` (`Dial(ctx, "host:port")`) and its SOCKS5 implementation over
-`exit.OpenStream` (`Session.OpenStream`). A host that parses as an address goes as IPv4 or
+`exit.OpenStream` (the supervisor's `OpenStream`, S4). A host that parses as an address goes as IPv4 or
 IPv6, anything else as a name resolved on the server. The greeting always offers "none", and
 "username/password" too when the profile has a login, so an exit open to anyone never gets
 the password. Errors: `*LoginError` (wrong login, a login required and the profile has
@@ -328,7 +328,31 @@ repeatedly is put aside for a while.
 **Done when** parsing, presets, pins, the bootstrap resolver (against a DNS server in the
 test) and putting aside are tested.
 
-### S4. Supervisor — `internal/supervisor`
+### S4. Supervisor — `internal/supervisor` — done
+
+**Result.** `Tunnel` over `client.Dial`, a `resolvers.Pool` and an optional
+`resolvers.Bootstrap`. A dial waits 20 s for the handshake (`DefaultHandshakeTimeout`,
+preliminary until S0); a failed dial moves to the next resolver at once and strikes it in
+the pool; a full round without a session is a delay of 1·2^n s up to 64 s, or, if no
+handshake has completed in this connect, the end: `*NeverConnectedError` names every
+resolver with its error and the four reasons. A new session is checked by
+`Options.CheckExit` (`exit.SOCKS5.Check`): a refused login and an exit that is not SOCKS5
+stop the tunnel, any other error is a retry through the same resolver. A session that dies
+by itself goes to the pool (`SessionEnded`); one that lived a minute clears the backoff and
+is redialed at once, a shorter one waits the next delay; the same resolver first, unless
+it is put aside now. No data from the server for 25 s — `StateDegraded`, data again —
+`StateConnected`. `Restart(reason)` ends the session or attempt, clears the backoff, the
+pool and the bootstrap cache, and dials from the top; it cuts a delay short.
+`OpenStream(ctx)` opens a stream through the session that is up, or waits for the next one
+until ctx ends (`ErrNoSession`; an ended ctx refuses at once, as S5 refuses "no session"
+for now), and refuses once the tunnel stops (`ErrStopped`);
+`exit.OpenStream` now takes a ctx for it. A stop calls `Options.Drain` with the session
+still up, for 5 s at most; the second Ctrl+C cuts it short (`Interrupt`, `WithAbort`,
+`OnAbort` from csqtt-cli). `Status` is the snapshot for the status line. Tests with a fake
+dialer for each of these, and a test with the in-process server (`TestServer.Reopen`, a
+new own core file entry) where the session dies of silence while the server is down and
+comes back by itself. The client keepalive timeout stays the upstream 2 min until it is
+measured on the live server (S0).
 
 States of §08: dialing through the list, a handshake timeout, backoff after a full round,
 server silence on the first connect (stop, naming the four reasons), `Restart` from

@@ -18,8 +18,9 @@ type Dialer interface {
 	Dial(ctx context.Context, address string) (net.Conn, error)
 }
 
-// OpenStream opens a new stream to the server's exit: Session.OpenStream of the core.
-type OpenStream func() (net.Conn, error)
+// OpenStream opens a new stream to the server's exit: Session.OpenStream of the core, or
+// the supervisor's, which waits for a session until ctx ends.
+type OpenStream func(ctx context.Context) (net.Conn, error)
 
 // LoginError is a refusal of the exit to let us in: a wrong login or password, or a login
 // the exit requires and the profile does not have. Another attempt gets the same answer,

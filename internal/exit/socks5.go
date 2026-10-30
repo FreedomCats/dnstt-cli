@@ -38,8 +38,8 @@ const (
 	atypIPv6   = 0x04
 )
 
-// handshakeTimeout bounds the whole exchange with the exit, the exit's own connect to the
-// target included: a silent exit does not hold a connection of an app forever. Every
+// handshakeTimeout bounds the whole exchange with the exit, the wait for a stream and the
+// exit's own connect to the target included: a silent exit does not hold a connection of an app forever. Every
 // message is a round trip through DNS, so it is generous.
 const handshakeTimeout = 60 * time.Second
 
@@ -122,12 +122,12 @@ func (s *SOCKS5) handshake(ctx context.Context, address string, req []byte) (net
 	if err := s.checkLogin(); err != nil {
 		return nil, err
 	}
-	conn, err := s.Open()
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	conn, err := s.Open(ctx)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
-	defer cancel()
 	// An ended ctx breaks the exchange: a deadline in the past ends the read in progress.
 	// A smux stream reads its write deadline only when a Write starts, so the deadline of
 	// ctx is set beforehand too: a write stuck in a stalled session ends with it.

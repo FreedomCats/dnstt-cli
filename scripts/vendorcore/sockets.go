@@ -91,6 +91,7 @@ var socketSites = []socketSite{
 	{File: "server/main.go", Func: "main", Name: "net.ResolveIPAddr", Count: 1, Reason: "server, upstream main, not called"},
 	{File: "server/main.go", Func: "main", Name: "net.ListenPacket", Count: 1, Reason: "server, upstream main, not called"},
 	{File: "server/testing.go", Func: "StartTest", Name: "net.ListenUDP", Count: 1, Reason: "server, tests only: loopback UDP"},
+	{File: "server/testing.go", Func: "TestServer.Reopen", Name: "net.ListenUDP", Count: 1, Reason: "server, tests only: loopback UDP"},
 }
 
 // siteKey identifies a place: file, function, identifier.

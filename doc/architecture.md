@@ -458,19 +458,30 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
 ```
 
 - **Dialing** — `core.Dial` with the next resolver of the list; the handshake has its own
-  timeout (to be measured, E1). A timeout or error moves to the next resolver at once; a
-  full round without success — backoff `1·2^n` s up to 64 s, as in csqtt-cli.
-- **Connected** — a finished handshake. The first stream also checks the exit: a SOCKS5
-  login refusal is final (`Stopping`) with a clear message; an exit that does not answer is
-  a retry.
+  timeout (20 s for now, to be measured on the live server). A timeout or error moves to
+  the next resolver at once; a full round without success — backoff `1·2^n` s up to 64 s,
+  as in csqtt-cli.
+- **Connected** — a finished handshake and a checked exit: every new session logs in to
+  the exit without a request (`exit.SOCKS5.Check`) before it counts. A SOCKS5 login refusal
+  and an exit that does not answer as SOCKS5 are final (`Stopping`) with a clear message:
+  another attempt gets the same answer. An exit that breaks the stream is a retry.
+- **Session end** — a session that died by itself counts against its resolver if it lived
+  less than a minute (R5) and waits the next backoff delay; one that lived longer clears
+  the backoff and is redialed at once. The same resolver is tried first.
+- **Degraded** — no data from the server for 25 s (it sends a keepalive every 10 s); data
+  again — Connected. The core ends the session after its keepalive timeout.
+- **Streams between sessions** — the datapath opens streams through the supervisor, which
+  waits for the next session until the datapath's deadline; once the tunnel stops, at
+  once a refusal.
 - **Server silence on the first connect** — if no resolver has ever completed a handshake
   in this `connect`, the reason cannot be told apart (wrong domain, wrong key, server down,
   every resolver blocked): `connect` stops and names all four. After one success, silence
   is a retry.
 - **Restart** — `Restart(reason)` from network tracking, as in csqtt-cli: the session is
   closed, the next dial starts at once with a reset backoff.
-- **Second Ctrl+C** — as in csqtt-cli: the first one stops the tunnel and cleans up, the
-  second one does not wait for open connections, the third one kills the process.
+- **Second Ctrl+C** — as in csqtt-cli: the first one stops the tunnel and cleans up (the
+  datapath finishes open connections for up to 5 s with the session still up), the second
+  one does not wait for open connections, the third one kills the process.
 
 ---
 

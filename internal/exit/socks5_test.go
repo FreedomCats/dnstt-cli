@@ -170,7 +170,7 @@ func TestDialConnectRefused(t *testing.T) {
 
 // A refusal cut short after its code is still a refusal.
 func TestDialRefusalCutShort(t *testing.T) {
-	open := func() (net.Conn, error) {
+	open := func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go func() {
 			defer server.Close()
@@ -221,7 +221,7 @@ func TestDialNotSOCKS5(t *testing.T) {
 		{"method not offered", "\x05\x02"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			open := func() (net.Conn, error) {
+			open := func(context.Context) (net.Conn, error) {
 				client, server := net.Pipe()
 				go func() {
 					defer server.Close()
@@ -243,7 +243,7 @@ func TestDialNotSOCKS5(t *testing.T) {
 
 // A stream closed in the middle of the exchange is an error of the stream, not a refusal.
 func TestDialStreamClosed(t *testing.T) {
-	open := func() (net.Conn, error) {
+	open := func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go func() {
 			server.Read(make([]byte, 64))
@@ -262,7 +262,7 @@ func TestDialStreamClosed(t *testing.T) {
 
 func TestDialOpenFails(t *testing.T) {
 	failed := errors.New("opening stream: session closed")
-	open := func() (net.Conn, error) { return nil, failed }
+	open := func(context.Context) (net.Conn, error) { return nil, failed }
 	if _, err := (&SOCKS5{Open: open}).Dial(dialCtx(t), "192.0.2.1:80"); !errors.Is(err, failed) {
 		t.Fatalf("got %v", err)
 	}
@@ -271,7 +271,7 @@ func TestDialOpenFails(t *testing.T) {
 // A silent exit holds Dial only until ctx ends, and the stream is closed then.
 func TestDialCancel(t *testing.T) {
 	closed := make(chan struct{})
-	open := func() (net.Conn, error) {
+	open := func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go func() {
 			io.Copy(io.Discard, server)
@@ -354,7 +354,7 @@ func TestConnectRequest(t *testing.T) {
 
 // A login that RFC 1929 cannot carry is refused before a stream is opened.
 func TestBadLogin(t *testing.T) {
-	open := func() (net.Conn, error) {
+	open := func(context.Context) (net.Conn, error) {
 		t.Error("a stream was opened")
 		return nil, errors.New("unexpected")
 	}

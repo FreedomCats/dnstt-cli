@@ -83,7 +83,7 @@ func TestPoolShortSessions(t *testing.T) {
 	if _, aside := p.Aside(0); aside {
 		t.Fatal("aside, although a long session came between")
 	}
-	p.SessionEnded(0, shortSession-time.Second)
+	p.SessionEnded(0, ShortSession-time.Second)
 	if _, aside := p.Aside(0); !aside {
 		t.Fatal("not aside after three short sessions")
 	}

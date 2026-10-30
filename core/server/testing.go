@@ -17,9 +17,12 @@ type TestServer struct {
 	// PubKey is the server's Noise public key, generated for this server.
 	PubKey []byte
 
-	conn net.PacketConn
-	done chan struct{}
-	err  error
+	privkey  []byte
+	domain   dns.Name
+	upstream string
+	conn     net.PacketConn
+	done     chan struct{}
+	err      error
 }
 
 // StartTest starts the upstream server for domain on 127.0.0.1 with a new key. Every
@@ -34,16 +37,33 @@ func StartTest(domain dns.Name, upstream string) (*TestServer, error) {
 		return nil, err
 	}
 	s := &TestServer{
-		Addr:   conn.LocalAddr().(*net.UDPAddr),
-		PubKey: noise.PubkeyFromPrivkey(privkey),
-		conn:   conn,
-		done:   make(chan struct{}),
+		Addr:     conn.LocalAddr().(*net.UDPAddr),
+		PubKey:   noise.PubkeyFromPrivkey(privkey),
+		privkey:  privkey,
+		domain:   domain,
+		upstream: upstream,
 	}
+	s.start(conn)
+	return s, nil
+}
+
+func (s *TestServer) start(conn net.PacketConn) {
+	s.conn, s.done = conn, make(chan struct{})
 	go func() {
-		s.err = run(privkey, domain, upstream, conn)
+		s.err = run(s.privkey, s.domain, s.upstream, conn)
 		close(s.done)
 	}()
-	return s, nil
+}
+
+// Reopen starts a closed server again on the same address with the same key, as a
+// restarted dnstt-server: the sessions of the old one are unknown to it.
+func (s *TestServer) Reopen() error {
+	conn, err := net.ListenUDP("udp", s.Addr)
+	if err != nil {
+		return err
+	}
+	s.start(conn)
+	return nil
 }
 
 // Close stops the server: it stops answering queries. Sessions already open are not told;
