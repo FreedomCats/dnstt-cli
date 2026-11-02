@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 ---
 
 # SOCKS5 datapath
@@ -34,3 +34,30 @@ Windows; `go vet ./...` and `go test -race ./...` are clean.
 ## Depends on
 
 [Supervisor](../04-supervisor/plan.md) and [SOCKS5 exit](../02-exit/plan.md) — both done.
+
+## Outcome
+
+Done as planned: `datapath.NewSocks` with `SocksOptions{Listen, Dialer, Up, Logf}`.
+`internal/datapath` imports `internal/exit` only; the "no session" check is the `Up func()
+bool` hook, called before `Dial` — `false` is refused with `0x03` without asking the exit,
+`nil` is no check. The caller (S7) passes its own view of the tunnel, e.g. connected or
+degraded. The interfaces of `datapath.go` are unchanged.
+
+Replies: success `0x00`, a `*exit.ConnectError` its own code, anything else (a login
+refusal, an exit that is not SOCKS5, the session ended) `0x01`; `BIND` and `UDP ASSOCIATE`
+`0x07`, an unknown address type `0x08`, an empty host name `0x04`. Only the method "none"
+is offered; a client without it gets `0xFF`. Names go to the exit as names, IPv6
+addresses as addresses — the exit decides whether it can reach them. The greeting and the
+request are bounded by 10 s, the dial by 60 s (the exit's own limit), the reply by 10 s;
+the relay has no deadlines. `smux.Stream` has no `CloseWrite`, so a half-close of either
+side ends the whole connection.
+
+Tests run a real SOCKS5 client (`golang.org/x/net/proxy`) through the in-process dnstt
+server to an echo server behind a SOCKS5 exit, plus a fake dialer for reply codes, the
+`Up` hook, `Close` with idle, half-done and relaying clients, and no goroutines left
+behind. The Windows tests compile; they are run by the CI.
+
+Left for [Commands](../07-commands/plan.md): `smux.Stream.Close` waits up to 30 s of its
+own for its frame to go out, so `Socks.Close` over a stalled session that is not yet
+closed can take that long. The stop of `connect` should close the session (stop the
+supervisor) before or together with `Socks.Close`.
