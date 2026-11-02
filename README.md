@@ -7,7 +7,7 @@ proxy mode only), the dnstt client core built in.
 
 > **In development.** Nothing works yet: the repository is at its foundation stage. What
 > is planned and in which order — [`doc/architecture.md`](doc/architecture.md) and
-> [`doc/plan.md`](doc/plan.md).
+> [`doc/roadmap/`](doc/roadmap/README.md).
 
 This is only a client. The server side stays with dnstt itself: `dnstt-server` and
 whatever its owner runs behind it (a SOCKS5 proxy with a login is the main case).

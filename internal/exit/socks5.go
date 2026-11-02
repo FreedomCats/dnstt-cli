@@ -17,7 +17,8 @@ import (
 // The messages go one at a time, each after the answer to the previous one, although the
 // tunnel is slow and every round trip costs. Sending the greeting, the login and the
 // request in one write saves two round trips, but a server that reads one message per recv
-// drops the rest and hangs. Whether danted takes it is to be seen live (plan.md S8).
+// drops the rest and hangs. Whether danted takes it is to be seen live (the live
+// acceptance task of the SOCKS5 stage).
 
 const socksVersion = 5
 

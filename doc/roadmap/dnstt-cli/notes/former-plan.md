@@ -1,3 +1,11 @@
+# Former implementation plan
+
+This is the plan as it stood before the project moved to the roadmap. The live plan is
+[`../plan.md`](../plan.md); the results recorded there are condensed from this file. Nothing
+here is updated any more.
+
+---
+
 # dnstt-cli implementation plan
 
 A step-by-step plan for `architecture.md`. Decisions R1–R9, core patches P1–P7 and stages

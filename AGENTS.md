@@ -4,11 +4,15 @@
 
 Everything in the repository is in English: code comments, documentation in `doc/`,
 `README.md`, `AGENTS.md` and other project files, project memory and working notes
-(`doc/local/`), commit messages, release notes. Comments in code carried over from other
-projects (qwdtt-cli, csqtt-cli, the dnstt upstream) may stay as they are; translating them
-is optional.
+(`doc/local/`), commit messages, release notes. This includes the roadmap in
+`doc/roadmap/`; its language is fixed by `lang: en` in the root of each roadmap.
+Comments in code carried over from other projects (qwdtt-cli, csqtt-cli, the dnstt
+upstream) may stay as they are; translating them is optional.
 
 Conversation with the user is in the user's language (Russian), not in English.
+
+This is a personal, non-commercial project: it has no Jira and no issue numbers. Commits
+start with a plain description, without a task key.
 
 ## Personal data — never in the repository
 
@@ -62,12 +66,24 @@ course of work goes only into the logs.
 Two subdirectories are outside git (`.gitignore`):
 
 - `doc/local/` — stage plans and logs `plan-*.md` (they inevitably contain the
-  environment and dates), working notes (the resume point for new sessions —
-  `doc/local/resume.md`) and copies of documents before cleanup;
+  environment and dates), the journal of decisions of the roadmap (`doc/local/journal.md`),
+  working notes and copies of documents before cleanup;
 - `doc/runs/` — scripts and logs of live runs.
 
 Check a new document for publication against this file before `git add`; put a draft
 with environment details into `doc/local/`.
+
+## The roadmap
+
+The work is led by a stage-and-task tree in `doc/roadmap/`: `doc/roadmap/README.md` lists
+the roadmaps, each roadmap is a directory with a root `plan.md` and stages and tasks under
+it. The notation (`kind`, `status`, `base`, `depends`, the sections of a node) is described
+in the `lead` agent's rules.
+
+The roadmap is published like the rest of `doc/`, with one exception: its journal with
+dated decisions and the resume point — "where we stopped" — is `doc/local/journal.md`,
+outside git. Nodes in the repository carry decisions and results without dates or
+environment; the course of work stays in `doc/local/`.
 
 ## Third-party code under an incompatible license
 
@@ -99,6 +115,10 @@ Where the description came from (a file of the other project, without paths from
 machine) is recorded in the stage log (`doc/local/`).
 
 ## Commits
+
+The first line is a short description of the change, without an issue number: the project
+has no Jira, and there are no task keys to put there. The body follows a blank line and
+says what was done and why, in English like the rest of the repository.
 
 Author and committer — only `FreedomCats <noreply@freedomcats.invalid>` (set in the
 repository's `.git/config`). The date is today's, but without the time: midnight UTC.

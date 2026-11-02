@@ -99,8 +99,8 @@ has only streams.
 The SOCKS5 messages go one at a time, each after the answer to the previous one: three
 round trips through DNS before the first byte of a connection with a login, two without.
 Sending them all in one write saves one or two, but a server that reads one message per
-`recv` drops the rest and hangs. It is turned on only if `danted` is seen to take it (S8 of
-`plan.md`), and then as a setting of the exit.
+`recv` drops the rest and hangs. It is turned on only if `danted` is seen to take it (live
+acceptance, stage 2 of the roadmap), and then as a setting of the exit.
 
 ### R4. The core's own sockets bypass the tunnel through one hook
 
@@ -648,36 +648,41 @@ Formats and behaviour are facts and are implemented anew.
 
 ## 12. Stages
 
-### E0. Foundation
+The order of the work, the state of each stage and the tasks inside it — the roadmap in
+[`roadmap/`](roadmap/README.md). This section is not kept up to date: it says what each
+stage was meant to be, and the roadmap says what it is. The old letters stay in the
+headings below and in commit messages, so that references in this document still resolve:
+`E` is a stage, `F` and `S` are its tasks.
+
+### Foundation (E0)
 
 Go module, the csqtt-cli packages without VK, captcha and `coreproc`, `scripts/vendorcore`
-and `core/` from the mirror with P1, CI for Linux and Windows. Done: Go 1.26.2; the core
-dependencies at the upstream versions (`flynn/noise` 1.0.0, `utls` 1.6.6, `kcp-go` 5.6.8,
-`smux` 1.5.24), the shared `x/crypto` and `x/net` raised to the csqtt-cli versions; the
-carried packages translated into English; `SO_MARK` 0x1076 and new adapter and WFP GUIDs.
+and `core/` from the mirror with P1, CI for Linux and Windows. The dependencies the core
+settled on: `flynn/noise` 1.0.0, `kcp-go` 5.6.8, `smux` 1.5.24, `utls` raised to `v1.7.3`
+by P5; `SO_MARK` 0x1076.
 
-### E1. `socks` with reconnection — Linux and Windows
+### SOCKS5 mode with reconnection — Linux and Windows (E1)
 
 Session API, supervisor, SOCKS5 exit with a password, local SOCKS5, resolver list with
-failover and `resolvers check`, P2–P5, profiles and secrets, the status line. Result: a browser goes through
-the server's `danted` with a login, and the session survives a server restart and a network
-change.
+failover and `resolvers check`, P2–P5, profiles and secrets, the status line. Result: a
+browser goes through the server's `danted` with a login, and the session survives a server
+restart and a network change.
 
-### E2. System VPN on Linux
+### System VPN on Linux (E2)
 
 `tun` with netstack, DNS over TCP, UDP rejection, routes, system DNS, DNS protection,
 kill-switch and IPv6 blocking (§05a), `rp_filter`, network tracking, `sudo`.
 
-### E3. System VPN on Windows
+### System VPN on Windows (E3)
 
 Wintun, WFP with one app ID, the rest as in csqtt-cli.
 
-### E4. Interactive mode and releases
+### Interactive mode and releases (E4)
 
-Menu, wizard and privilege elevation (§10a), `slipnet://` import, release archives with
-`SHA256SUMS.txt`.
+Menu, wizard and privilege elevation (§10a), `slipnet://` import, P6 and P7, release
+archives with `SHA256SUMS.txt`, the license.
 
-### E5. SSH exit
+### SSH exit (E5)
 
 `direct-tcpip`, password and key, pinned host key.
 

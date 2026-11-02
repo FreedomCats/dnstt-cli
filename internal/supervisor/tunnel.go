@@ -19,7 +19,7 @@ import (
 const (
 	// DefaultHandshakeTimeout is how long a dial waits for the Noise handshake: the
 	// server's first answer through the resolver. Preliminary: to be measured against the
-	// live server (plan.md S0).
+	// live server (the live acceptance task of the SOCKS5 stage).
 	DefaultHandshakeTimeout = 20 * time.Second
 	// DefaultDegradedAfter is how long a session may hear nothing from the server before
 	// it counts as degraded. The server sends a smux keepalive every 10 s.
