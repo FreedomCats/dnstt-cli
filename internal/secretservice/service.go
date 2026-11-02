@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-
-	"github.com/FreedomCats/dnstt-cli/internal/app"
 )
+
+const appName = "dnstt-cli"
 
 const (
 	serviceName      = "org.freedesktop.secrets"
@@ -156,7 +156,7 @@ func (c *client) Close() error {
 func (c *client) service() dbus.BusObject { return c.conn.Object(serviceName, servicePath) }
 
 func attributes(id string) map[string]string {
-	return map[string]string{attrApp: app.Name, attrID: id}
+	return map[string]string{attrApp: appName, attrID: id}
 }
 
 func (c *client) Put(id, label, value string) error {

@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/sudo"
 )
 
@@ -38,7 +37,7 @@ func TestRoundTrip(t *testing.T) {
 			t.Errorf("%d items, expected one: overwriting must not multiply them", len(f.items))
 		}
 		for _, item := range f.items {
-			if item.attrs[attrApp] != app.Name || item.label != "dnstt-cli home.password" {
+			if item.attrs[attrApp] != appName || item.label != "dnstt-cli home.password" {
 				t.Errorf("item: label %q, attributes %v", item.label, item.attrs)
 			}
 		}

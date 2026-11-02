@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/FreedomCats/dnstt-cli/internal/app"
 )
 
 // SecretsFileName is the name of the secret store file. It lives in the config directory,
@@ -51,6 +49,15 @@ func NewSecretStore() (SecretStore, error) {
 		return nil, err
 	}
 	return NewSecretStoreFor(path), nil
+}
+
+// GetSecret reads a secret from the default store by its reference.
+func GetSecret(ref string) (string, error) {
+	store, err := NewSecretStore()
+	if err != nil {
+		return "", err
+	}
+	return store.Get(ref)
 }
 
 // NewSecretStoreFor opens the store next to the given config file.
@@ -189,7 +196,7 @@ func (s *store) putKeyring(name, value string) (string, error) {
 		}
 	}
 
-	if err := s.note(k.Put(id, app.Name+" "+name, value)); err != nil {
+	if err := s.note(k.Put(id, appName+" "+name, value)); err != nil {
 		return "", fmt.Errorf("cannot write secret %q: %w", name, err)
 	}
 	data.Secrets[id] = secretEntry{Name: name, Store: keyringScheme}

@@ -14,14 +14,15 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/sudo"
 )
+
+const appName = "dnstt-cli"
 
 // Names of the config directory and file. The directory is shared by the whole program:
 // the secret store (secret.go) lives next to profiles.toml.
 const (
-	AppDir   = app.Name
+	AppDir   = appName
 	FileName = "profiles.toml"
 )
 

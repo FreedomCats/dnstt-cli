@@ -69,6 +69,9 @@ type command struct {
 // program is run for, then the service ones.
 func commands() []*command {
 	return []*command{
+		connectCommand(),
+		profileCommand(),
+		resolversCommand(),
 		versionCommand(),
 		helpCommand(),
 	}
@@ -130,6 +133,15 @@ func report(e *env, cmd *command, err error) int {
 	case errors.Is(err, errReported):
 		// The flag package has already printed both the error and the help.
 		return exitUsage
+	}
+
+	// Handle explicit exit code errors.
+	var ec *exitCodeError
+	if errors.As(err, &ec) {
+		if ec.msg != "" {
+			fmt.Fprintf(e.stderr, "%s %s: %v\n", app.Name, cmd.name, ec.msg)
+		}
+		return ec.code
 	}
 
 	var ue usageError
