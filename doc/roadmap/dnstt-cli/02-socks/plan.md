@@ -31,10 +31,10 @@ Chain: local SOCKS5 listener → `exit.Dialer` (SOCKS5 over a tunnel stream) →
 2. [SOCKS5 exit](02-exit/plan.md) — S2. Done.
 3. [Resolvers](03-resolvers/plan.md) — S3. Done.
 4. [Supervisor](04-supervisor/plan.md) — S4. Done.
-5. [SOCKS5 datapath](05-socks-datapath/plan.md) — S5. Next.
-6. [Profiles and secrets](06-profiles-secrets/plan.md) — S6.
-7. [Commands](07-commands/plan.md) — S7.
-8. [Live acceptance](08-live-acceptance/plan.md) — S8.
+5. [SOCKS5 datapath](05-socks-datapath/plan.md) — S5. Done.
+6. [Profiles and secrets](06-profiles-secrets/plan.md) — S6. Done.
+7. [Commands](07-commands/plan.md) — S7. Done.
+8. [Live acceptance](08-live-acceptance/plan.md) — S8. A stage of its own.
 
 S1–S3 do not depend on each other; the order above is the one they were taken in. A test
 server of the user's own (the old `S0`) is not a node: it is a live prerequisite of
