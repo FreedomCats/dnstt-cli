@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/FreedomCats/dnstt-cli/core/client"
 	"github.com/FreedomCats/dnstt-cli/core/dns"
+	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
 )
@@ -100,13 +102,20 @@ func runResolversCheck(ctx context.Context, e *env, args []string) error {
 		return fmt.Errorf("resolvers: %w", err)
 	}
 
-	fmt.Fprintf(e.stdout, "Checking %d resolver(s) for profile %q...\n", len(expanded), profileName)
+	return runResolverChecks(ctx, e, profileName, prof, domain, pubkey, expanded, app.SystemNetworkDNS, client.Dial)
+}
+
+type resolverDialFunc func(context.Context, client.Config) (*client.Session, error)
+
+func runResolverChecks(ctx context.Context, e *env, profileName string, prof *config.Profile, domain dns.Name, pubkey []byte, expanded []resolvers.Resolver, networkDNS func() ([]netip.Addr, error), dial resolverDialFunc) error {
+	checks := resolverChecks(expanded, prof.Bootstrap, networkDNS)
+	fmt.Fprintf(e.stdout, "Checking %d resolver(s) for profile %q...\n", len(checks), profileName)
 
 	anyPassed := false
-	for _, r := range expanded {
-		// Skip network entry for now (it needs network DNS lookup).
-		if r.Network {
-			fmt.Fprintf(e.stdout, "  %s: SKIPPED (network DNS not implemented)\n", r.Name())
+	for _, check := range checks {
+		r := check.resolver
+		if check.err != nil {
+			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, check.err)
 			continue
 		}
 
@@ -116,20 +125,20 @@ func runResolversCheck(ctx context.Context, e *env, args []string) error {
 			PubKey:   pubkey,
 			Resolver: r.Core(),
 			UTLS:     prof.UTLS,
-			LookupIP: r.LookupIP(nil), // No bootstrap for now.
+			LookupIP: check.lookup,
 		}
 
 		// Try the handshake with a timeout.
 		checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		start := time.Now()
-		session, err := client.Dial(checkCtx, cfg)
+		session, err := dial(checkCtx, cfg)
 		elapsed := time.Since(start)
 		cancel()
 
 		if err != nil {
-			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", r.Name(), err)
+			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, err)
 		} else {
-			fmt.Fprintf(e.stdout, "  %s: OK (%v)\n", r.Name(), elapsed.Truncate(time.Millisecond))
+			fmt.Fprintf(e.stdout, "  %s: OK (%v)\n", check.name, elapsed.Truncate(time.Millisecond))
 			session.Close()
 			anyPassed = true
 		}
@@ -141,6 +150,47 @@ func runResolversCheck(ctx context.Context, e *env, args []string) error {
 	}
 
 	return nil
+}
+
+type resolverCheck struct {
+	name     string
+	resolver resolvers.Resolver
+	lookup   resolvers.LookupFunc
+	err      error
+}
+
+func resolverChecks(list []resolvers.Resolver, own []string, networkDNS func() ([]netip.Addr, error)) []resolverCheck {
+	var ownServers []netip.AddrPort
+	if len(own) > 0 {
+		var err error
+		ownServers, err = resolvers.ParseBootstrap(own)
+		if err != nil {
+			return []resolverCheck{{name: "bootstrap", err: err}}
+		}
+	}
+	bootstrap := resolvers.NewProfileBootstrap(ownServers, list, networkDNS)
+
+	var checks []resolverCheck
+	for _, r := range list {
+		if !r.Network {
+			checks = append(checks, resolverCheck{name: r.Name(), resolver: r, lookup: r.LookupIP(bootstrap.LookupIP)})
+			continue
+		}
+		servers, err := networkDNS()
+		if err != nil {
+			checks = append(checks, resolverCheck{name: r.Name(), err: fmt.Errorf("network DNS: %w", err)})
+			continue
+		}
+		if len(servers) == 0 {
+			checks = append(checks, resolverCheck{name: r.Name(), err: errors.New("network DNS: the system has no DNS server")})
+			continue
+		}
+		for _, server := range servers {
+			networkResolver := resolvers.NetworkResolver(server)
+			checks = append(checks, resolverCheck{name: fmt.Sprintf("network (%s)", server), resolver: networkResolver, lookup: networkResolver.LookupIP(bootstrap.LookupIP)})
+		}
+	}
+	return checks
 }
 
 // exitCodeError is an error that carries a specific exit code.

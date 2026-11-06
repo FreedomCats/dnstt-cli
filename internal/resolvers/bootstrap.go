@@ -63,6 +63,37 @@ func BootstrapServers(own []netip.AddrPort, network []netip.Addr, list []Resolve
 	return servers
 }
 
+// ProfileBootstrapServers reads the profile's bootstrap sources in R5 order. An error
+// reading network DNS does not prevent the address-based UDP resolvers from being used.
+func profileBootstrapServers(own []netip.AddrPort, list []Resolver, networkDNS func() ([]netip.Addr, error)) ([]netip.AddrPort, error) {
+	if len(own) > 0 {
+		return BootstrapServers(own, nil, list), nil
+	}
+	var network []netip.Addr
+	var networkErr error
+	if networkDNS == nil {
+		networkErr = errors.New("network DNS cannot be read on this platform")
+	} else {
+		network, networkErr = networkDNS()
+	}
+	if networkErr != nil {
+		network = nil
+	}
+	servers := BootstrapServers(nil, network, list)
+	if len(servers) > 0 {
+		return servers, nil
+	}
+	return nil, networkErr
+}
+
+// NewProfileBootstrap builds a bootstrap resolver from the profile's own servers, or from
+// the network DNS and address-based UDP resolvers when the profile has none.
+func NewProfileBootstrap(own []netip.AddrPort, list []Resolver, networkDNS func() ([]netip.Addr, error)) *Bootstrap {
+	return newBootstrapWithError(func() ([]netip.AddrPort, error) {
+		return profileBootstrapServers(own, list, networkDNS)
+	}, nil)
+}
+
 // ParseBootstrap reads the bootstrap servers of a profile: plain DNS by address,
 // udp:address[:port] or address[:port] (53 by default). A host name is refused: it would
 // need a bootstrap of its own.
@@ -114,7 +145,7 @@ const (
 
 // Bootstrap is the bootstrap resolver: LookupIP is the fallback of Resolver.LookupIP.
 type Bootstrap struct {
-	servers func() []netip.AddrPort
+	servers func() ([]netip.AddrPort, error)
 	control func(network, address string, c syscall.RawConn) error
 	timeout time.Duration
 	now     func() time.Time
@@ -133,6 +164,10 @@ type cached struct {
 // (BootstrapServers over the system's DNS of the moment). control is put on every socket
 // (netguard), nil leaves them as they are.
 func NewBootstrap(servers func() []netip.AddrPort, control func(network, address string, c syscall.RawConn) error) *Bootstrap {
+	return newBootstrapWithError(func() ([]netip.AddrPort, error) { return servers(), nil }, control)
+}
+
+func newBootstrapWithError(servers func() ([]netip.AddrPort, error), control func(network, address string, c syscall.RawConn) error) *Bootstrap {
 	return &Bootstrap{
 		servers: servers,
 		control: control,
@@ -161,7 +196,10 @@ func (b *Bootstrap) LookupIP(ctx context.Context, host string) ([]netip.Addr, er
 	if ok && b.now().Before(c.expires) {
 		return append([]netip.Addr(nil), c.addrs...), nil
 	}
-	servers := b.servers()
+	servers, err := b.servers()
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap resolver: network DNS: %w", err)
+	}
 	if len(servers) == 0 {
 		return nil, fmt.Errorf("bootstrap resolver: no servers to resolve %s with: the network gave the "+
 			"system no DNS; pin the resolver's address (@address) or set bootstrap in the profile", key)

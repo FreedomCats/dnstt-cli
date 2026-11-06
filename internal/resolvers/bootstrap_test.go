@@ -365,6 +365,71 @@ func TestBootstrapServers(t *testing.T) {
 	}
 }
 
+func TestProfileBootstrapServers(t *testing.T) {
+	list, err := Expand([]string{"doh:https://doh.example/dns-query", "udp:192.0.2.53", "dot:dot.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkErr := errors.New("system DNS unavailable")
+	for _, tc := range []struct {
+		name    string
+		own     []netip.AddrPort
+		network []netip.Addr
+		err     error
+		want    []netip.AddrPort
+	}{
+		{"network before UDP", nil, addrs("198.51.100.53"), nil, ap("198.51.100.53:53", "192.0.2.53:53")},
+		{"explicit bootstrap only", ap("203.0.113.53:5353"), addrs("198.51.100.53"), nil, ap("203.0.113.53:5353")},
+		{"UDP fallback after reader error", nil, nil, networkErr, ap("192.0.2.53:53")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			got, err := profileBootstrapServers(tc.own, list, func() ([]netip.Addr, error) {
+				calls++
+				return tc.network, tc.err
+			})
+			if tc.name == "explicit bootstrap only" {
+				if calls != 0 {
+					t.Errorf("network DNS read %d times with explicit bootstrap", calls)
+				}
+			} else if calls != 1 {
+				t.Errorf("network DNS read %d times, want 1", calls)
+			}
+			if err != nil {
+				t.Fatalf("ProfileBootstrapServers error: %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("servers %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if _, err := profileBootstrapServers(nil, nil, func() ([]netip.Addr, error) { return nil, networkErr }); !errors.Is(err, networkErr) {
+		t.Errorf("empty bootstrap with network DNS error: %v, want %v", err, networkErr)
+	}
+}
+
+func TestProfileBootstrapReadsNetworkDNSForEveryCacheMiss(t *testing.T) {
+	list, err := Expand([]string{"doh:https://doh.example/dns-query"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	b := NewProfileBootstrap(nil, list, func() ([]netip.Addr, error) {
+		calls++
+		return addrs("198.51.100.53"), nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, host := range []string{"doh.example", "dot.example"} {
+		if _, err := b.LookupIP(ctx, host); !errors.Is(err, context.Canceled) {
+			t.Errorf("LookupIP(%q) error %v, want canceled", host, err)
+		}
+	}
+	if calls != 2 {
+		t.Errorf("network DNS read %d times for two cache misses, want 2", calls)
+	}
+}
+
 func TestParseBootstrap(t *testing.T) {
 	got, err := ParseBootstrap([]string{"udp:192.0.2.53", "198.51.100.53:5353", " [2001:db8::53] ", "UDP:192.0.2.53:53"})
 	if err != nil {

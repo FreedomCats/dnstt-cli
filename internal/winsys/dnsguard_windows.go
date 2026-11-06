@@ -12,7 +12,7 @@ import (
 	"github.com/tailscale/wf"
 	"golang.org/x/sys/windows"
 
-	"github.com/FreedomCats/dnstt-cli/internal/app"
+	"github.com/FreedomCats/dnstt-cli/internal/identity"
 )
 
 // Constant GUIDs of the WFP provider and sublayer: by them our filters are recognised in
@@ -107,7 +107,7 @@ func OpenDNSGuard(programs ...string) (*DNSGuard, error) {
 	}
 
 	session, err := wf.New(&wf.Options{
-		Name:        app.Name,
+		Name:        identity.Name,
 		Description: "dnstt-cli: DNS leak protection",
 		Dynamic:     true,
 	})
@@ -116,7 +116,7 @@ func OpenDNSGuard(programs ...string) (*DNSGuard, error) {
 	}
 	if err := session.AddProvider(&wf.Provider{
 		ID:          DNSGuardProvider,
-		Name:        app.Name,
+		Name:        identity.Name,
 		Description: "dnstt-cli: DNS leak protection",
 	}); err != nil {
 		session.Close()
@@ -124,7 +124,7 @@ func OpenDNSGuard(programs ...string) (*DNSGuard, error) {
 	}
 	if err := session.AddSublayer(&wf.Sublayer{
 		ID:          dnsGuardSublayer,
-		Name:        app.Name + " DNS",
+		Name:        identity.Name + " DNS",
 		Description: "dnstt-cli: DNS only through the tunnel",
 		Provider:    DNSGuardProvider,
 		Weight:      ^uint16(0),

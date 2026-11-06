@@ -2,6 +2,7 @@
 kind: task
 status: todo
 detailed: true
+depends: [01-network-resolver]
 ---
 
 # Live-run tool
@@ -35,8 +36,8 @@ user's server, so that a failure can be told apart.
    `network` becomes `resolvers.NetworkResolver` of the first server of
    `linuxsys.NetworkDNS()` / `winsys.NetworkDNS(0)` — files `network_linux.go`,
    `network_windows.go`, `network_other.go` (an error there) — for both sides, and the
-   output says so: `connect` cannot read the network's DNS yet
-   (`internal/app/tunnel.go:132`).
+    output says so; the `dnstt-cli` integration is fixed by the preceding
+    network-resolver task.
 3. **Upstream side** (`upstream.go`).
    - The clone: `-upstream`, by default `dnstt` next to the repository root (the directory
      with `go.mod`), as `scripts/vendorcore` takes it. `git -C <clone> rev-parse HEAD`
@@ -136,9 +137,6 @@ user's server, so that a failure can be told apart.
 - Building the upstream client needs the clone's module dependencies (a download if they
   are not cached); `-client-bin` is the way around. On the Windows machine the clone may
   be elsewhere — `-upstream`.
-- A host name without a pin fails on the `dnstt-cli` side unless the profile has its own
-  `bootstrap` (`internal/app/tunnel.go:78`), while the upstream side resolves it through
-  the system. The tool says so next to such an entry; it is a known gap, not a verdict.
 - Needed from the user: their server with a SOCKS5 exit and a login, a profile for it,
   resolvers that pass in their network, and the run of step 11. The values are given in
   chat or typed into the tool; none of them goes into a file of the repository.

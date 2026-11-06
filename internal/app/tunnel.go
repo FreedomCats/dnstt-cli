@@ -76,14 +76,11 @@ func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
 	}
 	pool := resolvers.NewPool(expanded)
 
-	// Parse bootstrap servers.
-	var bootstrap *resolvers.Bootstrap
-	if len(prof.Bootstrap) > 0 {
-		servers, err := resolvers.ParseBootstrap(prof.Bootstrap)
-		if err != nil {
-			return nil, fmt.Errorf("bootstrap: %w", err)
-		}
-		bootstrap = resolvers.NewBootstrap(func() []netip.AddrPort { return servers }, nil)
+	// Read profile bootstrap servers once; network servers remain dynamic.
+	networkDNS := SystemNetworkDNS
+	bootstrap, err := newProfileBootstrap(prof.Bootstrap, expanded, networkDNS)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
 	// Build the session config for the supervisor.
@@ -126,13 +123,10 @@ func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
 
 	// Build the supervisor.
 	tun, err := supervisor.New(supervisor.Options{
-		Session:   sessionCfg,
-		Resolvers: pool,
-		Bootstrap: bootstrap,
-		NetworkDNS: func() ([]netip.Addr, error) {
-			// TODO: read the network's DNS servers (linuxsys.NetworkDNS, winsys.NetworkDNS).
-			return nil, errors.New("network DNS not implemented yet")
-		},
+		Session:    sessionCfg,
+		Resolvers:  pool,
+		Bootstrap:  bootstrap,
+		NetworkDNS: networkDNS,
 		CheckExit: func(ctx context.Context, open exit.OpenStream) error {
 			if s5, ok := exitDialer.(*exit.SOCKS5); ok {
 				// Temporarily set Open for the check.
@@ -152,6 +146,18 @@ func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
 		Supervisor: tun,
 		Exit:       exitDialer,
 	}, nil
+}
+
+func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS func() ([]netip.Addr, error)) (*resolvers.Bootstrap, error) {
+	var own []netip.AddrPort
+	var err error
+	if len(entries) > 0 {
+		own, err = resolvers.ParseBootstrap(entries)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return resolvers.NewProfileBootstrap(own, list, networkDNS), nil
 }
 
 // BuildDatapath creates the datapath (socks or tun) for the tunnel. It must be called after

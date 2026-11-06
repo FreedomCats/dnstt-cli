@@ -1,7 +1,7 @@
 ---
 kind: task
 status: todo
-depends: [03-live-runs]
+depends: [04-live-runs]
 ---
 
 # Recording the results
@@ -17,7 +17,7 @@ that identifies the user, and the preliminary notes removed. `E1`, `S8`; `AGENTS
   one; §13 — the row "A dead session is noticed late".
 - The parent stage: its "Open points" lose the two timeout items, and the item about
   uTLS fingerprints left by S1 is closed or restated.
-- This stage's `Outcome`: what was seen live, per item of [Live runs](../03-live-runs/plan.md),
+- This stage's `Outcome`: what was seen live, per item of [Live runs](../04-live-runs/plan.md),
   on each platform; what failed and on which side; what was left open and why.
 - Code comments that still call a number preliminary or point at "the live acceptance
   task".

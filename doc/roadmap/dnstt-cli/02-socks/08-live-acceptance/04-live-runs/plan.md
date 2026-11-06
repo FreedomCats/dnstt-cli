@@ -1,16 +1,16 @@
 ---
 kind: stage
 status: todo
-depends: [01-live-run-script, 02-timeouts-and-danted]
+depends: [02-live-run-script, 03-timeouts-and-danted]
 ---
 
 # Live runs
 
 The acceptance runs of the SOCKS5 stage against the user's server, with the timeouts of
-[Timeouts and the `danted` question](../02-timeouts-and-danted/plan.md) in place. The
+[Timeouts and the `danted` question](../03-timeouts-and-danted/plan.md) in place. The
 agent cannot carry them out — a browser, a server restart, a network change, a Windows
 machine: the user runs them from a checklist, and every failure goes through `compare` of
-the [Live-run tool](../01-live-run-script/plan.md) before it is called a bug.
+the [Live-run tool](../02-live-run-script/plan.md) before it is called a bug.
 
 The checklist is written with placeholders (`<profile>`, `t.example.com`, "the ISP
 resolver"); its filled copy, the outputs and the course of the runs are in `doc/local/`.
@@ -49,9 +49,8 @@ What the runs have to show:
 
 - Needed from the user: the server and the right to restart it, two networks for the
   change, a Windows machine, the resolvers that pass in their network.
-- The entry `network` and resolver names without pins do not work in `connect` yet (see
-  the parent stage); the runs use entries by address or with pins. Whether to make
-  `network` work within this stage is the user's decision.
+- The network-resolver task and the preceding live-run tool must be complete before these
+  runs; include `network` and an unpinned resolver hostname in the resolver checks.
 - A network that lets none of the transports through makes it a design problem, not an
   acceptance run: name it when it happens.
 - If recovery after a network change takes too long for the keepalive alone, the remedy is

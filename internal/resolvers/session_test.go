@@ -45,6 +45,7 @@ func TestSessionThroughName(t *testing.T) {
 		queries int // to the bootstrap resolver
 	}{
 		{"udp:pinned.example:" + port + "@127.0.0.1", 0},
+		{"udp:127.0.0.1:" + port, 0},
 		{"udp:lo.example:" + port, 1},
 	} {
 		r, err := Parse(tc.entry)

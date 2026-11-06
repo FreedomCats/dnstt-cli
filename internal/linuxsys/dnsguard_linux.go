@@ -11,11 +11,11 @@ import (
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 
-	"github.com/FreedomCats/dnstt-cli/internal/app"
+	"github.com/FreedomCats/dnstt-cli/internal/identity"
 )
 
 // dnsGuardTable is the nftables table of DNS protection (`nft list table inet dnstt-cli`).
-const dnsGuardTable = app.Name
+const dnsGuardTable = identity.Name
 
 // DNSGuard is DNS leak protection on Linux, the counterpart of winsys.DNSGuard: nftables
 // rules forbid traffic to port 53, UDP and TCP, to all addresses except the tunnel

@@ -1,7 +1,7 @@
 ---
 kind: stage
 status: todo
-depends: [01-live-run-script]
+depends: [02-live-run-script]
 ---
 
 # Timeouts and the `danted` question
@@ -22,7 +22,7 @@ The two preliminary numbers measured on the live server and set in the code, and
   with a login.
 
 Measuring needs the user's server and resolvers. The probes extend the tool of
-[Live-run tool](../01-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
+[Live-run tool](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
 
 Where the numbers live now: `client.Config.KeepAliveTimeout` (0 — the upstream
 `idleTimeout`, `core/client/main.go`), never set by `internal/app/tunnel.go`; the smux
@@ -55,6 +55,6 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
 - The silence a healthy session sees depends on the resolver, not only on the server's
   10 s: a resolver that holds or drops answers stretches it. The timeout is derived from
   the slowest transport that is meant to work, not from R2's 30 s; if that is far from
-  30 s, R2 is corrected in [Recording the results](../04-record-results/plan.md).
+  30 s, R2 is corrected in [Recording the results](../05-record-results/plan.md).
 - Needed from the user: idle sessions of several minutes over each transport, and a
   `danted` with a login on their server.
