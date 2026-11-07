@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -106,3 +106,37 @@ and compatible project code; do not inspect or copy incompatible third-party cod
   existing SOCKS5 lifetime convention, not its wire protocol or error text.
 - No live access, profile creation or secret-store write is required. The next task wires
   the selected lazy `Connected` meaning and fatal 407 behavior into the application.
+
+## Outcome
+
+The protocol-only HTTP CONNECT dialer is implemented and independently reviewed.
+
+- `exit.HTTP` sends HTTP/1.1 CONNECT and optional Basic authentication through `OpenStream`.
+  Target authorities and credentials are validated before stream acquisition; target names
+  stay names for the remote proxy. `Dialer`, `OpenStream` and SOCKS5 behavior are unchanged.
+- Response parsing bounds the total header budget to 32 KiB, each status line to 4096 bytes
+  and the informational chain to eight responses. Final 2xx switches to raw target traffic,
+  preserving buffered bytes and ignoring HTTP body framing. The returned `net.Conn` forwards
+  deadlines and closure and supports concurrent reads.
+- A complete final 407 returns a fixed `LoginError`; other final refusals use
+  `HTTPConnectError` with only `StatusCode`. `ErrHTTPProtocol` distinguishes proven malformed,
+  non-HTTP and oversized responses. Incomplete exchanges and transport failures preserve their
+  causes without exposing credentials, request content or peer-supplied response text.
+- The caller context and existing 60-second limit cover acquisition and the full exchange.
+  Deadlines precede writes; cancellation and failed handshakes close streams, including late
+  acquisition results. Successful connections have no handshake deadline or cancellation hook.
+  Tests cover stalled smux acquisition and writes as well as completion/cancellation races.
+- Focused tests use synthetic input and independent proxy fixtures. A generated-key
+  in-process dnstt test carries data through a Basic-authenticated loopback proxy and confirms
+  that new streams still succeed on the same session after both target and login refusals.
+- Review found and fixed unsafe concurrent access to the buffered reader. The correction
+  serializes reads without blocking `Close` or deadline updates; race tests cover concurrent
+  readers and interruption. Independent recheck found no remaining defects or regressions.
+- Focused exit and datapath race tests, the full project race suite with mandatory isolated
+  D-Bus tests, the exact CI vet split and the static project build pass. Windows amd64
+  cross-build, split vet and applicable test-package compilation pass. Windows runtime, live
+  acceptance and network-mutating tests were not run; compilation is not runtime evidence.
+
+Profile/app/supervisor integration and the selected lazy readiness/fatal-407 behavior remain
+the next task. No real profile or secret store was accessed and no live traffic was sent.
+No real problem was left incompletely fixed because of cost.

@@ -1,6 +1,7 @@
 ---
 kind: stage
 status: in-progress
+base: c31d81c
 ---
 
 # HTTP CONNECT exit

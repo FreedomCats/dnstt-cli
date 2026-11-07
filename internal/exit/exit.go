@@ -1,7 +1,7 @@
 // Package exit is the far end of a tunnel stream: what the dnstt server hands every stream
 // to. The server knows one fixed TCP address, so the address of a connection is told to the
-// exit inside the stream (architecture.md R3): SOCKS5 now, SSH in E5. Datapaths see only
-// Dialer.
+// exit inside the stream (architecture.md R3): SOCKS5 or HTTP CONNECT, SSH in E5.
+// Datapaths see only Dialer.
 package exit
 
 import (
