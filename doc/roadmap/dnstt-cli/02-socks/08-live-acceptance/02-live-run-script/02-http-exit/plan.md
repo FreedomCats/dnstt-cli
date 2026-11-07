@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: c31d81c
 ---
 
@@ -38,3 +38,36 @@ new profile field.
 2. [Profile and supervisor integration](02-profile-integration/plan.md) — expose `http` in
    profiles and the application using lazy first-application-`CONNECT` authentication and
    fatal 407 stop behavior. Task.
+
+## Outcome
+
+The HTTP CONNECT exit is implemented at the stream protocol and integrated through profiles,
+secret lookup, the supervisor and the existing local SOCKS5 datapath. HTTP authentication is
+lazy by design: `Connected` means tunnel readiness until the first real application CONNECT;
+a final HTTP 407 stops the supervisor without resolver retry. Existing SOCKS5 behavior and
+the deferred SSH path remain intact.
+
+- The protocol dialer uses bounded HTTP/1.1 CONNECT with optional Basic authentication over
+  the supplied tunnel stream. It preserves target bytes buffered with the final response,
+  uses safe typed failures, and has focused tests plus an in-process generated-identity
+  tunnel test.
+- The profile and application path reuses `exit.user` and `exit.password_ref`, binds streams
+  to the current supervisor session, and keeps SOCKS5 startup login checks session-local.
+  The first HTTP application request performs authentication; fatal 407 wakes pending
+  streams and prevents resolver penalties, backoff and redial. Other per-stream failures do
+  not stop the supervisor.
+- Independent reviews found and verified fixes for concurrent reads on the returned stream
+  and for a shutdown race that could turn the local SOCKS5 failure reply into EOF. No
+  integration findings remain.
+- The architecture documentation and placeholder example describe HTTP CONNECT/Basic,
+  shared secret-reference fields and HTTP readiness semantics. Documentation was committed
+  separately as `c140146`.
+- Focused race tests, the full race suite with isolated D-Bus, the exact CI vet split, static
+  Linux build, Windows amd64 cross-build/vet and applicable test-package compilation passed.
+  The stage-level integration review of `c31d81c..c140146` found no inconsistencies or
+  privacy issues. Windows runtime, live services, network-mutating checks and netns tests
+  were not run.
+- No dependency or profile field was added, and no real profile or secret store was accessed.
+  An existing signal-reader goroutine in `internal/cli/connect.go` may remain blocked after
+  `runConnect` returns; review confirmed it is unchanged and not worsened by this stage, so
+  it remains a separate follow-up. No real problem was left incompletely fixed because of cost.
