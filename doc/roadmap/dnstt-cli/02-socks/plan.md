@@ -11,7 +11,12 @@ mode to the server's `danted` with a login, on Linux and Windows, and the sessio
 a server restart and a network change. No privileges: programs that have a proxy setting
 point it at the local SOCKS5 listener.
 
-Chain: local SOCKS5 listener → `exit.Dialer` (SOCKS5 over a tunnel stream) →
+The additional user-selected HTTP CONNECT/Basic exit uses the same local SOCKS5 listener;
+it is added during live-acceptance preparation, not substituted for the SOCKS5 result. Its
+supervisor reports tunnel readiness as `Connected` until the first real application CONNECT;
+that request performs Basic authentication, and a final HTTP 407 stops the supervisor.
+
+Chain: local SOCKS5 listener → `exit.Dialer` (SOCKS5 or HTTP CONNECT over a tunnel stream) →
 `supervisor.Tunnel` (one session at a time, a resolver list, reconnection) →
 `core.Dial` (transport → KCP → Noise → smux).
 
@@ -19,6 +24,8 @@ Chain: local SOCKS5 listener → `exit.Dialer` (SOCKS5 over a tunnel stream) →
 
 - A browser through the local proxy reaches a site over DoH, DoT and UDP resolvers, on
   Linux and Windows.
+- The configured HTTP CONNECT exit with Basic authentication is also exercised through the
+  local SOCKS5 proxy over working DoH and UDP resolvers, on Linux and Windows.
 - The session survives a server restart and a network change, and streams opened in the
   new session work without restarting the client.
 - `resolvers check` names the dead resolvers and exits non-zero when none passes.

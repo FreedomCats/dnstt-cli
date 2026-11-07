@@ -7,7 +7,16 @@ depends: [02-live-run-script]
 # Timeouts and the `danted` question
 
 The two preliminary numbers measured on the live server and set in the code, and the
-`danted` question answered. `E1`, `S8`; `architecture.md` R2, R3, §04, §08, §13.
+SOCKS5 `danted` question answered. `E1`, `S8`; `architecture.md` R2, R3, §04, §08, §13.
+
+This stage stays focused on the SOCKS5 exchange in `internal/exit/socks5.go` and the
+server's `danted` service. Its probes use the SOCKS5 baseline child of the live-run
+tooling stage. HTTP CONNECT response timing and HTTP proxy behavior are outside this
+question and are handled by the HTTP exit and HTTP-comparison children.
+
+The dependency on `02-live-run-script` is retained as the preparation-stage gate before
+measurements; it no longer includes user-run acceptance. It does not make an HTTP proxy
+a valid substitute for `danted`, and no HTTP-specific setting is added here.
 
 - **Keepalive.** The client's smux keepalive timeout: how long a session may hear nothing
   from the server before it counts as dead. It stands at the upstream 2 min; R2 expects
@@ -22,7 +31,7 @@ The two preliminary numbers measured on the live server and set in the code, and
   with a login.
 
 Measuring needs the user's server and resolvers. The probes extend the tool of
-[Live-run tool](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
+[Live-run tooling](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
 
 Where the numbers live now: `client.Config.KeepAliveTimeout` (0 — the upstream
 `idleTimeout`, `core/client/main.go`), never set by `internal/app/tunnel.go`; the smux
@@ -42,7 +51,7 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
   by, are set in the code: `connect` sets the keepalive timeout of its sessions, the
   handshake timeout replaces the preliminary 20 s, `resolvers check` uses the same
   handshake timeout, and `DefaultDegradedAfter` is checked against both. Tests pass.
-- A one-write greeting, login and `CONNECT` sent through the tunnel to the user's
+- A one-write SOCKS5 greeting, login and `CONNECT` sent through the tunnel to the user's
   `danted` has a recorded answer: taken or not.
 - If it is taken: the SOCKS5 exit has the setting, the profile has a key for it with
   validation, and tests cover both ways of the exchange. If not: the comment in
@@ -57,4 +66,4 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
   the slowest transport that is meant to work, not from R2's 30 s; if that is far from
   30 s, R2 is corrected in [Recording the results](../05-record-results/plan.md).
 - Needed from the user: idle sessions of several minutes over each transport, and a
-  `danted` with a login on their server.
+  `danted` with a login on their server. An HTTP proxy is not part of this measurement.

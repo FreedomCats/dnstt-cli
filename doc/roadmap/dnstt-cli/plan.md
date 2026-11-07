@@ -22,6 +22,10 @@ holds what is done and in which order.
 
 - `dnstt-cli connect` carries a browser through the server's SOCKS5 exit with a login, on
   Linux and Windows, and the session survives a server restart and a network change.
+- The local SOCKS5 proxy also carries a browser through a configured HTTP CONNECT exit
+  with Basic authentication on Linux and Windows, without removing the SOCKS5 or SSH exit
+  choices. HTTP authentication starts on the first real application CONNECT; before it,
+  `Connected` means tunnel readiness only, and HTTP 407 stops the supervisor.
 - `tun` mode sends all system traffic through the tunnel on Linux and on Windows, with DNS
   protection, kill-switch and IPv6 block; what leaks and what does not is written in
   README.
