@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 depends: [01-connect-dialer]
 ---
@@ -175,3 +175,51 @@ credentials were verified.
   stores or injected lookup only.
 - No real profile, credential or live network access is needed from the user. The later
   `04-live-runs` stage owns authenticated DoH/UDP and Windows acceptance.
+
+## Outcome
+
+The HTTP exit is integrated through profile loading, secret lookup, the application and the
+existing local SOCKS5 datapath. The selected lazy readiness and fatal-407 contract is
+implemented and independently reviewed. The HTTP product task is complete; the HTTP exit
+stage remains in progress until the lead's architecture documentation update and the stage's
+remaining acceptance.
+
+- Profiles accept `exit.type = "http"`, preserve the empty-type SOCKS5 default, and retain
+  the existing `user` and `password_ref` fields. Save/load, secret-reference validation,
+  minimal empty-reference profiles and invalid HTTP credential combinations are tested.
+- HTTP construction reads a referenced password before opening any tunnel stream, does not
+  access the store for an empty reference, and returns fixed safe errors for secret lookup
+  failures. The dialer is bound once to the supervisor's current-session `OpenStream`.
+- HTTP publishes `Connected` after tunnel readiness without a startup stream. The first real
+  application CONNECT carries the target and performs Basic authentication. Final 407 signals
+  a one-shot fatal supervisor stop, preserves the first cause, wakes pending streams and does
+  not penalize a resolver, restart, back off or redial. Other HTTP stream failures remain
+  per-request; normal session reconnection and new-session stream acquisition are covered.
+- The SOCKS5 checker is session-local and does not mutate the shared datapath dialer. Empty
+  type and explicit SOCKS5 retain the login-only startup check; SSH remains recognized and
+  deferred. The loopback SOCKS5 client needs no exit credentials, and HTTP refusals map to its
+  existing generic failure rather than a fabricated SOCKS5 reply code.
+- Graceful cleanup for a fatal HTTP login refusal stops new local accepts and waits up to the
+  existing five-second drain limit for accepted SOCKS5 handshakes to send their failure
+  reply. Forced close and normal SOCKS5/cancellation behavior remain immediate. A deterministic
+  regression verifies that the application receives the generic failure rather than EOF.
+- `dnstt-cli.example.toml` lists `socks5 | http | ssh` with its existing placeholder values.
+  No dependency, profile field, authentication scheme or startup probe was added.
+- Programmer and independent reviewer ran the focused config/exit/app/datapath/supervisor/CLI
+  race tests and the full race suite with isolated D-Bus enabled. The exact Linux/Windows CI
+  vet split, static Linux build, Windows amd64 cross-build and applicable Windows test-package
+  compilation passed. Windows runtime, live services, real profiles/secrets and netns tests
+  were not used.
+- Initial review found a shutdown race where CLI cleanup could close an accepted SOCKS5 client
+  before its generic failure reply was written. The bounded HTTP-login shutdown above fixes
+  it; independent recheck found no remaining defects or regressions.
+- **Documentation handoff to lead:** update `doc/architecture.md` R3 to describe HTTP/1.1
+  CONNECT with Basic alongside SOCKS5 while retaining SSH second; R8 to retain the existing
+  secret-store fields and describe HTTP's use of them; §03 and §04 to list the HTTP exit and
+  protocol dialer; §08 to distinguish HTTP tunnel-only `Connected`, first-application-CONNECT
+  authentication, fatal 407 stop and retryable per-stream failures while preserving SOCKS5's
+  startup check; and §10 to list `socks5 | http | ssh` with the unchanged `user` and
+  `password_ref` fields. Keep the example placeholder-only. This product Markdown handoff is
+  not included in this task commit and the HTTP stage is not accepted here.
+
+No real problem was left incompletely fixed because of cost.

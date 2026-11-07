@@ -64,10 +64,13 @@ type Socks struct {
 	ctx    context.Context // ends with Close
 	cancel context.CancelFunc
 	wg     sync.WaitGroup // the accept loop and one goroutine for each connection
+	// handshakes counts accepted connections until their SOCKS5 reply has been sent.
+	handshakes sync.WaitGroup
 
-	mu    sync.Mutex
-	conns map[net.Conn]net.Conn // the program's side of each connection, to its stream
-	down  bool
+	mu      sync.Mutex
+	conns   map[net.Conn]net.Conn // the program's side of each connection, to its stream
+	down    bool                  // no more accepted connections
+	closing bool                  // Close is forcing all connections to end
 }
 
 // NewSocks opens the listener. A busy port or an address that is not loopback is an error
@@ -110,6 +113,7 @@ func (s *Socks) ListenAddr() net.Addr { return s.ln.Addr() }
 func (s *Socks) Close() error {
 	s.mu.Lock()
 	s.down = true
+	s.closing = true
 	s.mu.Unlock()
 	err := s.ln.Close()
 	s.cancel()
@@ -118,6 +122,32 @@ func (s *Socks) Close() error {
 	if errors.Is(err, net.ErrClosed) {
 		err = nil
 	}
+	return err
+}
+
+// Shutdown stops accepting connections and lets accepted handshakes send their replies
+// until ctx ends. It then calls Close, including for established relays. Close may be
+// called concurrently to force shutdown at once. The caller must bound ctx.
+func (s *Socks) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	s.down = true
+	s.mu.Unlock()
+	err := s.ln.Close()
+	if errors.Is(err, net.ErrClosed) {
+		err = nil
+	}
+	finished := make(chan struct{})
+	go func() { s.handshakes.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-s.ctx.Done():
+	}
+	if closeErr := s.Close(); err == nil {
+		err = closeErr
+	}
+	<-finished
 	return err
 }
 
@@ -157,6 +187,7 @@ func (s *Socks) start(c net.Conn) bool {
 	}
 	s.conns[c] = c
 	s.wg.Add(1)
+	s.handshakes.Add(1)
 	return true
 }
 
@@ -164,6 +195,12 @@ func (s *Socks) start(c net.Conn) bool {
 func (s *Socks) serve(c net.Conn) {
 	defer s.wg.Done()
 	defer s.untrack(c, c)
+	handshaking := true
+	defer func() {
+		if handshaking {
+			s.handshakes.Done()
+		}
+	}()
 	var target net.Conn
 	defer func() {
 		if target != nil {
@@ -215,6 +252,8 @@ func (s *Socks) serve(c net.Conn) {
 	if err := s.reply(c, repSucceeded); err != nil {
 		return
 	}
+	handshaking = false
+	s.handshakes.Done()
 	// Established: no deadlines on either side any more.
 	_ = c.SetDeadline(time.Time{})
 	s.logf("[SOCKS] %v: opened", req)
@@ -266,7 +305,7 @@ func relay(a, b net.Conn) {
 func (s *Socks) track(c, peer net.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.down {
+	if s.closing {
 		c.Close()
 		peer.Close()
 		return false

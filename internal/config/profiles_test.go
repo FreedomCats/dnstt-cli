@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -66,6 +68,100 @@ func TestProfilesRoundTrip(t *testing.T) {
 	}
 	if home.Exit.PasswordRef != "secretservice:0123456789abcdef" {
 		t.Errorf("exit.password_ref: got %q", home.Exit.PasswordRef)
+	}
+}
+
+func TestHTTPProfilesRoundTrip(t *testing.T) {
+	for _, ex := range []Exit{
+		{Type: "http"},
+		{Type: "http", User: "synthetic-user"},
+		{Type: "http", User: "synthetic-user", PasswordRef: "file:synthetic-id"},
+	} {
+		t.Run(fmt.Sprint(ex.User != "", ex.PasswordRef != ""), func(t *testing.T) {
+			p := &Profiles{DefaultProfile: "home", Profile: map[string]*Profile{"home": {
+				Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: ex,
+			}}}
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := SaveProfilesTo(path, p); err != nil {
+				t.Fatal(err)
+			}
+			got, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Profile["home"].Exit, ex) {
+				t.Fatalf("exit changed on round-trip: %+v", got.Profile["home"].Exit)
+			}
+		})
+	}
+}
+
+func TestHTTPProfileValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		exit Exit
+		want string
+	}{
+		{"reference without user", Exit{Type: "http", PasswordRef: "file:synthetic-id"}, "password_ref requires a user"},
+		{"colon in user", Exit{Type: "http", User: "private:user"}, "invalid user"},
+		{"control in user", Exit{Type: "http", User: "private\ruser"}, "invalid user"},
+		{"password value", Exit{Type: "http", User: "user", PasswordRef: "private-password"}, "must be a reference"},
+		{"empty scheme", Exit{Type: "http", User: "user", PasswordRef: ":private-id"}, "must be a reference"},
+		{"unknown type", Exit{Type: "unknown"}, "exit.type"},
+		{"default", Exit{}, ""},
+		{"SOCKS5 colon and control", Exit{Type: "socks5", User: "user:\r"}, ""},
+		{"SOCKS5 reference without user", Exit{Type: "socks5", PasswordRef: "file:synthetic-id"}, ""},
+		{"SSH deferred", Exit{Type: "ssh"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: tc.exit}
+			err := validateProfile("home", p)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatalf("validation exposed the invalid value: %v", err)
+			}
+			if err := SaveProfilesTo(filepath.Join(t.TempDir(), FileName), &Profiles{Profile: map[string]*Profile{"home": p}}); err == nil {
+				t.Fatal("saved an invalid profile")
+			}
+			raw := fmt.Sprintf("[profile.home]\ndomain = %q\npubkey = %q\n[profile.home.exit]\ntype = %q\nuser = %q\npassword_ref = %q\n",
+				p.Domain, p.Pubkey, tc.exit.Type, tc.exit.User, tc.exit.PasswordRef)
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadProfilesFrom(path); err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "private") {
+				t.Fatalf("invalid HTTP profile load = %v", err)
+			}
+		})
+	}
+}
+
+func TestHTTPProfileRejectsNewFieldsAndInlinePassword(t *testing.T) {
+	for _, key := range []string{"password", "proxy_url", "target", "readiness", "auth_scheme"} {
+		t.Run(key, func(t *testing.T) {
+			raw := fmt.Sprintf(`[profile.home]
+domain = "t.example.com"
+pubkey = "%s"
+[profile.home.exit]
+type = "http"
+%s = "synthetic-value"
+`, strings.Repeat("01", 32), key)
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadProfilesFrom(path); err == nil || !strings.Contains(err.Error(), "unknown key") {
+				t.Fatalf("load = %v, want an unknown-key error", err)
+			}
+		})
 	}
 }
 
@@ -471,4 +567,3 @@ func TestProfilesWithSecrets(t *testing.T) {
 		t.Errorf("password: got %q, want %q", password, "my-exit-password")
 	}
 }
-

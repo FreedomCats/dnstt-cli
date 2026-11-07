@@ -21,7 +21,8 @@ const (
 	// StateDialing: a session is dialed through a resolver, up to its handshake and the
 	// check of the exit.
 	StateDialing State = "dialing"
-	// StateConnected: a session is up and the exit let us in.
+	// StateConnected: a session is up and CheckExit, if configured, passed. With an HTTP
+	// exit this means tunnel readiness; the first application CONNECT checks the login.
 	StateConnected State = "connected"
 	// StateDegraded: the session is up, but the server has sent nothing for longer than
 	// its keepalives allow. It ends by itself, either way: data comes back, or the core

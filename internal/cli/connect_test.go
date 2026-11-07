@@ -1,11 +1,19 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,7 +22,307 @@ import (
 	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
 	"github.com/FreedomCats/dnstt-cli/internal/datapath"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
+	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
+
+func TestConnectHTTPProfile(t *testing.T) {
+	for _, wrong := range []bool{false, true} {
+		t.Run(fmt.Sprint("wrong password ", wrong), func(t *testing.T) {
+			path := isolatedConnectConfig(t)
+			upstream, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { upstream.Close() })
+			const user, password = "synthetic-user", "synthetic-password"
+			token := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
+			requests := make(chan *http.Request, 10)
+			var accepted atomic.Int32
+			go func() {
+				for {
+					c, err := upstream.Accept()
+					if err != nil {
+						return
+					}
+					accepted.Add(1)
+					go func() {
+						defer c.Close()
+						c.SetDeadline(time.Now().Add(20 * time.Second))
+						r := bufio.NewReader(c)
+						req, err := http.ReadRequest(r)
+						if err != nil {
+							return
+						}
+						requests <- req
+						if req.Header.Get("Proxy-Authorization") != token {
+							io.WriteString(c, "HTTP/1.1 407 private-reason\r\nProxy-Authenticate: Basic realm=\"private-challenge\"\r\n\r\nprivate-body")
+							return
+						}
+						if _, err := io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
+							return
+						}
+						io.Copy(c, r)
+					}()
+				}
+			}()
+			domain, err := dns.ParseName("t.example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv, err := server.StartTest(domain, upstream.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { srv.Close() })
+			secret := password
+			if wrong {
+				secret = "synthetic-wrong-password"
+			}
+			ref, err := config.NewSecretStoreFor(path).Put("home.password", secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := &config.Profile{
+				Domain: domain.String(), Pubkey: fmt.Sprintf("%x", srv.PubKey),
+				Resolvers: []string{"udp:" + srv.Addr.String()}, Datapath: "socks",
+				Exit:  config.Exit{Type: "http", User: user, PasswordRef: ref},
+				Socks: config.Socks{Listen: "127.0.0.1:0"},
+			}
+			if err := config.SaveProfilesTo(path, &config.Profiles{DefaultProfile: "home", Profile: map[string]*config.Profile{"home": p}}); err != nil {
+				t.Fatal(err)
+			}
+			output := &connectOutput{lines: make(chan string, 100)}
+			e := &env{stdout: io.Discard, stderr: output, stdin: strings.NewReader("")}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			done := make(chan int, 1)
+			go func() { done <- run(ctx, e, []string{"connect", "-v"}) }()
+			defer func() { cancel(); waitConnectResult(t, done) }()
+			var address string
+			for address == "" {
+				select {
+				case line := <-output.lines:
+					if after, ok := strings.CutPrefix(line, "[SOCKS] listening on "); ok {
+						address = strings.TrimSpace(after)
+					}
+				case <-ctx.Done():
+					t.Fatal("connect did not open its local listener")
+				}
+			}
+			var c net.Conn
+			var reply byte
+			for {
+				c, reply = connectSOCKSRequest(t, address)
+				if reply != 3 {
+					break
+				}
+				c.Close()
+				select {
+				case <-time.After(10 * time.Millisecond):
+				case <-ctx.Done():
+					t.Fatal("tunnel did not become ready")
+				}
+			}
+			defer c.Close()
+			if wrong {
+				if reply != 1 {
+					t.Fatalf("407 mapped to SOCKS5 code %d, want 1", reply)
+				}
+				if code := waitConnectResult(t, done); code != exitError {
+					t.Fatalf("connect exit = %d, want %d", code, exitError)
+				}
+				if !strings.Contains(output.String(), "the HTTP exit refused authentication (status 407)") {
+					t.Fatal("command did not report the fixed login failure")
+				}
+			} else {
+				if reply != 0 {
+					t.Fatalf("CONNECT returned SOCKS5 code %d", reply)
+				}
+				msg := []byte("CLI application through HTTP exit")
+				if _, err := c.Write(msg); err != nil {
+					t.Fatal(err)
+				}
+				got := make([]byte, len(msg))
+				if _, err := io.ReadFull(c, got); err != nil || !bytes.Equal(got, msg) {
+					t.Fatalf("application echo = %q, %v", got, err)
+				}
+				cancel()
+				if code := waitConnectResult(t, done); code != exitOK {
+					t.Fatalf("connect exit = %d, want %d", code, exitOK)
+				}
+			}
+			if accepted.Load() != 1 {
+				t.Fatalf("HTTP exit streams = %d, want the one application request", accepted.Load())
+			}
+			req := <-requests
+			if req.Host != "echo.example:7" || req.RequestURI != req.Host || req.Method != "CONNECT" {
+				t.Fatal("the command did not preserve the application target")
+			}
+			for _, private := range []string{user, password, secret, token, ref, "private-", path} {
+				if strings.Contains(output.String(), private) {
+					t.Fatalf("command diagnostics exposed %q", private)
+				}
+			}
+		})
+	}
+}
+
+func TestConnectSSHDeferred(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	p := &config.Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: config.Exit{Type: "ssh"}}
+	if err := config.SaveProfilesTo(path, &config.Profiles{DefaultProfile: "home", Profile: map[string]*config.Profile{"home": p}}); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runCLI(t, "connect")
+	if code != exitError || !strings.Contains(stderr, "SSH exit is not implemented yet (stage E5)") {
+		t.Fatalf("SSH command = %d, %q", code, stderr)
+	}
+}
+
+func TestFinishConnectOnlyDrainsHTTPLogin(t *testing.T) {
+	for _, kind := range []string{"http", "socks5", ""} {
+		for _, cause := range []error{nil, context.Canceled, &exit.LoginError{}, &exit.HTTPConnectError{StatusCode: 403}} {
+			t.Run(fmt.Sprintf("%s/%T", kind, cause), func(t *testing.T) {
+				calls := 0
+				dp := &connectShutdown{shutdown: func(ctx context.Context) error {
+					calls++
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > supervisor.DefaultDrainTimeout || time.Until(deadline) < supervisor.DefaultDrainTimeout-time.Second {
+						t.Fatal("HTTP cleanup did not use the existing drain limit")
+					}
+					return errors.New("cleanup must not replace the fatal cause")
+				}}
+				if err := finishConnect(cause, kind, dp, make(chan struct{})); err != cause {
+					t.Fatal("cleanup replaced Run's result")
+				}
+				want := 0
+				if kind == "http" && exit.IsLogin(cause) {
+					want = 1
+				}
+				if calls != want {
+					t.Fatalf("Shutdown calls = %d, want %d", calls, want)
+				}
+			})
+		}
+	}
+}
+
+func TestFinishConnectAbortForcesShutdown(t *testing.T) {
+	entered := make(chan struct{})
+	dp := &connectShutdown{shutdown: func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	aborted := make(chan struct{})
+	want := &exit.LoginError{}
+	done := make(chan error, 1)
+	go func() { done <- finishConnect(want, "http", dp, aborted) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP cleanup did not start")
+	}
+	close(aborted)
+	select {
+	case err := <-done:
+		if err != want {
+			t.Fatal("abort replaced the first fatal cause")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("abort did not cancel HTTP cleanup")
+	}
+}
+
+type connectShutdown struct {
+	shutdown func(context.Context) error
+}
+
+func (d *connectShutdown) Close() error                       { return nil }
+func (d *connectShutdown) Shutdown(ctx context.Context) error { return d.shutdown(ctx) }
+
+func isolatedConnectConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("APPDATA", dir)
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	path, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative, err := filepath.Rel(dir, path); err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+		t.Fatal("config path escaped the isolated directory")
+	}
+	return path
+}
+
+type connectOutput struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	lines chan string
+}
+
+func (w *connectOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	select {
+	case w.lines <- string(p):
+	default:
+	}
+	return n, err
+}
+
+func (w *connectOutput) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func waitConnectResult(t *testing.T, done chan int) int {
+	t.Helper()
+	select {
+	case code := <-done:
+		done <- code
+		return code
+	case <-time.After(10 * time.Second):
+		t.Fatal("connect did not finish")
+		return -1
+	}
+}
+
+func connectSOCKSRequest(t *testing.T, address string) (net.Conn, byte) {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", address, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetDeadline(time.Now().Add(20 * time.Second))
+	if _, err := c.Write([]byte{5, 1, 0}); err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	var choice [2]byte
+	if _, err := io.ReadFull(c, choice[:]); err != nil || choice != [2]byte{5, 0} {
+		c.Close()
+		t.Fatalf("local greeting = %v, %v", choice, err)
+	}
+	request := append([]byte{5, 1, 0, 3, byte(len("echo.example"))}, []byte("echo.example\x00\x07")...)
+	if _, err := c.Write(request); err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	var reply [10]byte
+	if _, err := io.ReadFull(c, reply[:]); err != nil || reply[0] != 5 {
+		c.Close()
+		t.Fatalf("local reply = %v, %v", reply, err)
+	}
+	return c, reply[1]
+}
 
 // TestConnectWithInProcessServer tests that connect actually passes data through the tunnel.
 // It uses the full chain: echo server → SOCKS5 server → dnstt server → our client.

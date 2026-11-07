@@ -1,13 +1,17 @@
 package supervisor
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,6 +68,386 @@ func TestDialsThroughList(t *testing.T) {
 	want := []State{StateDialing, StateDialing, StateConnected, StateStopping}
 	if !slices.Equal(path, want) {
 		t.Errorf("states %v, want %v", path, want)
+	}
+}
+
+func TestFatalExitInterruptsRun(t *testing.T) {
+	for _, phase := range []string{"before run", "dial", "check", "connected", "backoff"} {
+		t.Run(phase, func(t *testing.T) {
+			entered := make(chan struct{})
+			h := newHarness(t, []string{r1, r2}, func(o *Options) {
+				if phase == "check" || phase == "backoff" {
+					o.CheckExit = func(ctx context.Context, _ exit.OpenStream) error {
+						if phase == "backoff" {
+							return errors.New("temporary exit interruption")
+						}
+						close(entered)
+						<-ctx.Done()
+						return ctx.Err()
+					}
+				}
+			})
+			// A fatal exit must not add the third strike, even during an interrupted dial.
+			pool := h.tun.opts.Resolvers
+			pool.HandshakeFailed(0)
+			pool.HandshakeFailed(0)
+			if phase == "dial" {
+				h.dial = func(string, int) error { close(entered); return errBlock }
+			}
+			if phase == "backoff" {
+				h.sleep = func(ctx context.Context, _ time.Duration) bool {
+					close(entered)
+					<-ctx.Done()
+					return false
+				}
+			}
+			want := fmt.Errorf("first fatal: %w", &exit.LoginError{})
+			pending := make(chan error, 1)
+			if phase == "before run" {
+				h.tun.FatalExit(want)
+				if h.tun.State() != StateIdle {
+					t.Fatal("FatalExit changed state outside Run")
+				}
+			}
+			h.run(context.Background())
+			switch phase {
+			case "dial", "check", "backoff":
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Run did not enter " + phase)
+				}
+			case "connected":
+				h.waitState(StateConnected, 1)
+			}
+			if phase != "connected" {
+				go func() {
+					c, err := h.tun.OpenStream(context.Background())
+					if c != nil {
+						c.Close()
+					}
+					pending <- err
+				}()
+			}
+			h.tun.FatalExit(want)
+			// Cancellation and Restart cannot replace an already reported fatal cause.
+			h.tun.Restart(errors.New("network changed"))
+			h.cancel()
+			if got := h.stop(); got != want {
+				t.Fatalf("Run = %v, want the first fatal error %v", got, want)
+			}
+			tr := h.waitState(StateStopping, 1)
+			if tr.Cause != want {
+				t.Fatalf("Stopping cause = %v, want %v", tr.Cause, want)
+			}
+			if phase != "connected" {
+				select {
+				case err := <-pending:
+					if !errors.Is(err, ErrStopped) {
+						t.Fatalf("pending OpenStream = %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("pending OpenStream did not wake")
+				}
+			}
+			if _, aside := pool.Aside(0); aside {
+				t.Error("fatal exit penalized the resolver")
+			}
+			wantDials, wantSleeps := 1, 0
+			if phase == "before run" {
+				wantDials = 0
+			}
+			if phase == "backoff" {
+				wantSleeps = 1
+			}
+			if got := len(h.dialList()); got != wantDials {
+				t.Errorf("dials = %d, want %d", got, wantDials)
+			}
+			if got := len(h.sleepList()); got != wantSleeps {
+				t.Errorf("backoffs = %d, want %d", got, wantSleeps)
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			stops := 0
+			for _, tr := range h.trans {
+				if tr.To == StateStopping {
+					stops++
+				}
+			}
+			if stops != 1 {
+				t.Errorf("Stopping transitions = %d, want 1", stops)
+			}
+			for _, s := range h.sessions {
+				if !s.closed.Load() {
+					t.Error("session left open")
+				}
+			}
+		})
+	}
+}
+
+func TestFatalExitConcurrentFirstCause(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	h.tun.FatalExit(nil)
+	want := fmt.Errorf("first refusal: %w", &exit.LoginError{})
+	h.tun.FatalExit(want)
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.tun.FatalExit(fmt.Errorf("later refusal: %w", &exit.LoginError{}))
+			h.tun.Restart(errors.New("network changed"))
+			h.cancel()
+		}()
+	}
+	wg.Wait()
+	if err := h.stop(); err != want {
+		t.Fatalf("Run = %v, want the first refusal", err)
+	}
+	if tr := h.waitState(StateStopping, 1); tr.Cause != want {
+		t.Fatalf("Stopping = %+v", tr)
+	}
+	if got := h.dialList(); len(got) != 1 {
+		t.Fatalf("redialed after a fatal exit: %v", got)
+	}
+}
+
+type pendingSession struct {
+	*fakeSession
+	entered chan struct{}
+	release chan struct{}
+	conn    net.Conn
+	once    sync.Once
+}
+
+func (s *pendingSession) OpenStream() (net.Conn, error) {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return s.conn, nil
+}
+
+func TestFatalExitPendingAcquisition(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	s := &pendingSession{fakeSession: newFakeSession(r1), entered: make(chan struct{}), release: make(chan struct{}), conn: a}
+	h.tun.dial = func(context.Context, client.Config) (Session, error) { return s, nil }
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	result := make(chan error, 1)
+	go func() {
+		c, err := h.tun.OpenStream(context.Background())
+		if c != nil {
+			c.Close()
+		}
+		result <- err
+	}()
+	<-s.entered
+	want := &exit.LoginError{}
+	h.tun.FatalExit(want)
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrStopped) {
+			t.Fatalf("OpenStream = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fatal exit did not interrupt acquisition")
+	}
+	if err := h.stop(); err != want || !s.closed.Load() {
+		t.Fatalf("Run = %v, session closed = %v", err, s.closed.Load())
+	}
+	close(s.release)
+	b.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := b.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("late stream was not closed: %v", err)
+	}
+}
+
+func TestFatalExitDuringRestart(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	entered := make(chan struct{})
+	h.dial = func(_ string, n int) error {
+		if n > 0 {
+			close(entered)
+			return errBlock
+		}
+		return nil
+	}
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	h.tun.Restart(errors.New("network changed"))
+	<-entered
+	want := &exit.LoginError{}
+	h.tun.FatalExit(want)
+	if err := h.stop(); err != want {
+		t.Fatalf("Run = %v, want fatal error", err)
+	}
+	if tr := h.waitState(StateStopping, 1); tr.Cause != want {
+		t.Fatalf("Stopping = %+v", tr)
+	}
+	if got := h.dialList(); len(got) != 2 {
+		t.Fatalf("dials = %v, want no dial after the signal", got)
+	}
+}
+
+func TestFatalExitDrainsOnce(t *testing.T) {
+	var h *harness
+	var calls atomic.Int32
+	want := &exit.LoginError{}
+	h = newHarness(t, []string{r1}, func(o *Options) {
+		o.Drain = func(context.Context) {
+			calls.Add(1)
+			if h.tun.State() != StateStopping || h.session(0).closed.Load() {
+				t.Error("fatal drain did not run while stopping with the session still up")
+			}
+			if _, err := h.tun.OpenStream(context.Background()); !errors.Is(err, ErrStopped) {
+				t.Error("fatal drain did not refuse a new stream")
+			}
+		}
+	})
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	h.tun.FatalExit(want)
+	if err := h.stop(); err != want || calls.Load() != 1 || !h.session(0).closed.Load() {
+		t.Fatalf("fatal Run = %v, drain calls = %d, session closed = %v", err, calls.Load(), h.session(0).closed.Load())
+	}
+}
+
+func TestFatalExitSimultaneousCallers(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			h.tun.FatalExit(fmt.Errorf("refusal %d: %w", i, &exit.LoginError{}))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	first := h.tun.fatalCause()
+	if first == nil || h.stop() != first || h.waitState(StateStopping, 1).Cause != first {
+		t.Fatal("concurrent fatal callers did not preserve one cause in Run and Stopping")
+	}
+}
+
+func TestFatalExitWinsPendingCancellation(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	onTransition := h.tun.opts.OnTransition
+	h.tun.opts.OnTransition = func(tr Transition) {
+		onTransition(tr)
+		if tr.To == StateConnected {
+			close(entered)
+			<-release
+		}
+	}
+	h.run(context.Background())
+	<-entered
+	// Run has not handled either notification: parent cancellation is already pending
+	// when the fatal application error arrives.
+	h.cancel()
+	want := &exit.LoginError{}
+	h.tun.FatalExit(want)
+	h.tun.Restart(errors.New("network changed"))
+	if h.tun.State() != StateConnected {
+		t.Error("the application goroutine changed the supervisor's state")
+	}
+	close(release)
+	if err := h.stop(); err != want || h.waitState(StateStopping, 1).Cause != want {
+		t.Fatal("cancellation replaced the fatal cause")
+	}
+	if len(h.dialList()) != 1 || len(h.sleepList()) != 0 {
+		t.Fatal("pending cancellation and fatal exit caused a retry")
+	}
+}
+
+func TestHTTPStreamsFollowSessionReconnect(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	h.tun.dial = wrapDial(h.tun.dial, func(s *fakeSession) {
+		s.serve = func(c net.Conn) {
+			r := bufio.NewReader(c)
+			req, err := http.ReadRequest(r)
+			if err != nil {
+				return
+			}
+			if req.Host == "blocked.example:443" {
+				io.WriteString(c, "HTTP/1.1 403 Forbidden\r\n\r\n")
+				return
+			}
+			if req.Host == "malformed.example:443" {
+				io.WriteString(c, "SSH-2.0-fixture\r\n")
+				return
+			}
+			if _, err := io.WriteString(c, "HTTP/1.1 200 Connected\r\n\r\n"); err != nil {
+				return
+			}
+			io.Copy(c, r)
+		}
+	})
+	h.run(context.Background())
+	h.waitState(StateConnected, 1)
+	d := &exit.HTTP{Open: h.tun.OpenStream}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, target := range []string{"blocked.example:443", "malformed.example:443"} {
+		if _, err := d.Dial(ctx, target); err == nil || exit.IsLogin(err) {
+			t.Fatalf("per-request refusal: %v", err)
+		}
+	}
+	if len(h.dialList()) != 1 || len(h.sleepList()) != 0 || h.tun.State() != StateConnected {
+		t.Fatal("per-request HTTP failures restarted the tunnel")
+	}
+	paused, release := make(chan struct{}), make(chan struct{})
+	h.mu.Lock()
+	h.sleep = func(ctx context.Context, _ time.Duration) bool {
+		close(paused)
+		select {
+		case <-release:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	h.mu.Unlock()
+	h.session(0).die(client.ErrSilent)
+	<-paused
+	result := make(chan error, 1)
+	go func() {
+		c, err := d.Dial(ctx, "echo.example:7")
+		if err == nil {
+			defer c.Close()
+			_, err = io.WriteString(c, "data")
+			if err == nil {
+				var got [4]byte
+				_, err = io.ReadFull(c, got[:])
+				if err == nil && string(got[:]) != "data" {
+					err = errors.New("incorrect echo after reconnect")
+				}
+			}
+		}
+		result <- err
+	}()
+	close(release)
+	h.waitState(StateConnected, 2)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("HTTP stream did not move to the new session")
+	}
+	if got := h.dialList(); !slices.Equal(got, []string{r1, r1}) {
+		t.Fatalf("normal reconnection dials = %v", got)
 	}
 }
 

@@ -276,6 +276,9 @@ func TestReplyCode(t *testing.T) {
 	cases := []error{
 		errors.New("the stream closed"),
 		&exit.LoginError{},
+		&exit.HTTPConnectError{StatusCode: 403},
+		&exit.HTTPConnectError{StatusCode: 502},
+		exit.ErrHTTPProtocol,
 		exit.ErrNotSOCKS5,
 		context.DeadlineExceeded,
 	}

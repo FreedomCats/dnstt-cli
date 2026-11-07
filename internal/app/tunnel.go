@@ -7,8 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"strings"
+	"sync"
 	"syscall"
+	"unicode"
 
 	"github.com/FreedomCats/dnstt-cli/core/client"
 	"github.com/FreedomCats/dnstt-cli/core/dns"
@@ -45,6 +49,10 @@ type Tunnel struct {
 // BuildTunnel creates the supervisor and the exit dialer from the profile, ready to be run.
 // It does not start the datapath: that is created separately after the tunnel is built.
 func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
+	return buildTunnel(opts, config.GetSecret)
+}
+
+func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*Tunnel, error) {
 	if opts.Profile == nil {
 		return nil, errors.New("no profile")
 	}
@@ -100,20 +108,36 @@ func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
 	if exitType == "" {
 		exitType = "socks5"
 	}
-	var exitDialer exit.Dialer
+	user := prof.Exit.User
+	var password string
+	var checkExit func(context.Context, exit.OpenStream) error
 	switch exitType {
 	case "socks5":
-		var password string
 		if prof.Exit.PasswordRef != "" {
-			password, err = config.GetSecret(prof.Exit.PasswordRef)
+			password, err = getSecret(prof.Exit.PasswordRef)
 			if err != nil {
 				return nil, fmt.Errorf("exit password: %w", err)
 			}
 		}
-		exitDialer = &exit.SOCKS5{
-			User:     prof.Exit.User,
-			Password: password,
-			// Open will be set by BuildDatapath when the supervisor is available.
+		checkExit = func(ctx context.Context, open exit.OpenStream) error {
+			return (&exit.SOCKS5{Open: open, User: user, Password: password}).Check(ctx)
+		}
+	case "http":
+		if strings.Contains(user, ":") || strings.ContainsFunc(user, unicode.IsControl) {
+			return nil, errors.New("HTTP exit: invalid user")
+		}
+		if prof.Exit.PasswordRef != "" {
+			if user == "" {
+				return nil, errors.New("HTTP exit: password_ref requires a user")
+			}
+			password, err = getSecret(prof.Exit.PasswordRef)
+			if err != nil {
+				// Store errors can contain references, paths or private payloads.
+				return nil, errors.New("HTTP exit: cannot read password from the secret store")
+			}
+		}
+		if strings.ContainsFunc(password, unicode.IsControl) {
+			return nil, errors.New("HTTP exit: invalid password")
 		}
 	case "ssh":
 		return nil, errors.New("SSH exit is not implemented yet (stage E5)")
@@ -123,29 +147,47 @@ func BuildTunnel(opts TunnelOptions) (*Tunnel, error) {
 
 	// Build the supervisor.
 	tun, err := supervisor.New(supervisor.Options{
-		Session:    sessionCfg,
-		Resolvers:  pool,
-		Bootstrap:  bootstrap,
-		NetworkDNS: networkDNS,
-		CheckExit: func(ctx context.Context, open exit.OpenStream) error {
-			if s5, ok := exitDialer.(*exit.SOCKS5); ok {
-				// Temporarily set Open for the check.
-				s5.Open = open
-				return s5.Check(ctx)
-			}
-			return nil
-		},
+		Session:      sessionCfg,
+		Resolvers:    pool,
+		Bootstrap:    bootstrap,
+		NetworkDNS:   networkDNS,
+		CheckExit:    checkExit,
 		OnTransition: opts.OnTransition,
 		Logf:         opts.Logf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("supervisor: %w", err)
 	}
+	var exitDialer exit.Dialer
+	if exitType == "http" {
+		exitDialer = &httpExit{
+			dialer: &exit.HTTP{Open: tun.OpenStream, User: user, Password: password},
+			fatal:  tun.FatalExit,
+		}
+	} else {
+		exitDialer = &exit.SOCKS5{Open: tun.OpenStream, User: user, Password: password}
+	}
 
 	return &Tunnel{
 		Supervisor: tun,
 		Exit:       exitDialer,
 	}, nil
+}
+
+// httpExit stops the tunnel on the first complete authentication refusal. Other HTTP
+// failures belong to their application request, not to the resolver's health.
+type httpExit struct {
+	dialer exit.Dialer
+	fatal  func(error)
+	once   sync.Once
+}
+
+func (h *httpExit) Dial(ctx context.Context, address string) (net.Conn, error) {
+	conn, err := h.dialer.Dial(ctx, address)
+	if exit.IsLogin(err) {
+		h.once.Do(func() { h.fatal(err) })
+	}
+	return conn, err
 }
 
 func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS func() ([]netip.Addr, error)) (*resolvers.Bootstrap, error) {
@@ -176,10 +218,6 @@ func BuildDatapath(tun *Tunnel, prof *config.Profile, logf func(format string, a
 		listen := prof.Socks.Listen
 		if listen == "" {
 			listen = datapath.DefaultSocksListen
-		}
-		// Set the Open function on the SOCKS5 exit.
-		if s5, ok := tun.Exit.(*exit.SOCKS5); ok {
-			s5.Open = tun.Supervisor.OpenStream
 		}
 		socks, err := datapath.NewSocks(datapath.SocksOptions{
 			Listen: listen,

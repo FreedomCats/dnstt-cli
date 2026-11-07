@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -14,25 +15,25 @@ import (
 
 // Profiles is the content of profiles.toml: a set of profiles and the default one.
 type Profiles struct {
-	DefaultProfile string               `toml:"default_profile"`
-	Profile        map[string]*Profile  `toml:"profile"`
+	DefaultProfile string              `toml:"default_profile"`
+	Profile        map[string]*Profile `toml:"profile"`
 }
 
 // Profile is one profile: the tunnel settings and the exit.
 type Profile struct {
-	Domain      string   `toml:"domain"`
-	Pubkey      string   `toml:"pubkey"`
-	Resolvers   []string `toml:"resolvers"`
-	Bootstrap   []string `toml:"bootstrap"`
-	UTLS        string   `toml:"utls"`
-	Datapath    string   `toml:"datapath"`
-	KillSwitch  bool     `toml:"kill_switch"`
-	TunDNS      string   `toml:"tun_dns"`
-	Exit        Exit     `toml:"exit"`
-	Socks       Socks    `toml:"socks"`
+	Domain     string   `toml:"domain"`
+	Pubkey     string   `toml:"pubkey"`
+	Resolvers  []string `toml:"resolvers"`
+	Bootstrap  []string `toml:"bootstrap"`
+	UTLS       string   `toml:"utls"`
+	Datapath   string   `toml:"datapath"`
+	KillSwitch bool     `toml:"kill_switch"`
+	TunDNS     string   `toml:"tun_dns"`
+	Exit       Exit     `toml:"exit"`
+	Socks      Socks    `toml:"socks"`
 }
 
-// Exit is the exit configuration: SOCKS5 or SSH.
+// Exit is the exit configuration: SOCKS5, HTTP CONNECT or SSH.
 type Exit struct {
 	Type        string `toml:"type"`
 	User        string `toml:"user"`
@@ -176,8 +177,16 @@ func validateProfile(name string, p *Profile) error {
 	}
 
 	// Validate exit type.
-	if p.Exit.Type != "" && p.Exit.Type != "socks5" && p.Exit.Type != "ssh" {
-		errs = append(errs, fmt.Errorf("%s: exit.type must be \"socks5\" or \"ssh\"", prefix))
+	if p.Exit.Type != "" && p.Exit.Type != "socks5" && p.Exit.Type != "http" && p.Exit.Type != "ssh" {
+		errs = append(errs, fmt.Errorf("%s: exit.type must be \"socks5\", \"http\" or \"ssh\"", prefix))
+	}
+	if p.Exit.Type == "http" {
+		if strings.Contains(p.Exit.User, ":") || strings.ContainsFunc(p.Exit.User, unicode.IsControl) {
+			errs = append(errs, fmt.Errorf("%s: HTTP exit: invalid user", prefix))
+		}
+		if p.Exit.PasswordRef != "" && p.Exit.User == "" {
+			errs = append(errs, fmt.Errorf("%s: HTTP exit: password_ref requires a user", prefix))
+		}
 	}
 
 	// Validate datapath.
@@ -263,16 +272,16 @@ func checkUnknownKeys(data map[string]any) error {
 
 func checkProfileKeys(profileName string, data map[string]any) error {
 	knownProfileKeys := map[string]bool{
-		"domain":       true,
-		"pubkey":       true,
-		"resolvers":    true,
-		"bootstrap":    true,
-		"utls":         true,
-		"datapath":     true,
-		"kill_switch":  true,
-		"tun_dns":      true,
-		"exit":         true,
-		"socks":        true,
+		"domain":      true,
+		"pubkey":      true,
+		"resolvers":   true,
+		"bootstrap":   true,
+		"utls":        true,
+		"datapath":    true,
+		"kill_switch": true,
+		"tun_dns":     true,
+		"exit":        true,
+		"socks":       true,
 	}
 
 	knownExitKeys := map[string]bool{

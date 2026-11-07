@@ -146,6 +146,8 @@ type Tunnel struct {
 	ready     chan struct{} // closed when the next session is up
 	since     time.Time
 	handshake time.Duration
+	fatalErr  error              // the first fatal exit failure; protected by mu
+	cancelRun context.CancelFunc // interrupts dial, check, serve and backoff
 
 	stopping     chan struct{} // closed when the tunnel starts to stop
 	stoppingOnce sync.Once
@@ -201,6 +203,31 @@ func (t *Tunnel) Restart(reason error) {
 	}
 }
 
+// FatalExit reports an exit failure that another resolver cannot fix. The first error
+// wins. It refuses new streams and interrupts Run; only Run changes state and shuts down
+// the session. Calls after stopping, and nil errors, have no effect.
+func (t *Tunnel) FatalExit(err error) {
+	if err == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.fatalErr != nil || t.state == StateStopping {
+		return
+	}
+	t.fatalErr = err
+	t.stoppingOnce.Do(func() { close(t.stopping) })
+	if t.cancelRun != nil {
+		t.cancelRun()
+	}
+}
+
+func (t *Tunnel) fatalCause() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.fatalErr
+}
+
 // State is the current state.
 func (t *Tunnel) State() State {
 	t.mu.Lock()
@@ -233,7 +260,7 @@ func (t *Tunnel) OpenStream(ctx context.Context) (net.Conn, error) {
 		l, ready := t.live, t.ready
 		t.mu.Unlock()
 		if l != nil {
-			stream, err := l.s.OpenStream()
+			stream, err := t.openSession(ctx, l.s, l.ended)
 			if err == nil {
 				return stream, nil
 			}
@@ -250,12 +277,67 @@ func (t *Tunnel) OpenStream(ctx context.Context) (net.Conn, error) {
 	}
 }
 
+// openSession bounds smux acquisition, which has no context API. An abandoned result is
+// closed even if OpenStream completes after cancellation or after the session was replaced.
+func (t *Tunnel) openSession(ctx context.Context, s Session, ended <-chan struct{}) (net.Conn, error) {
+	select {
+	case <-t.stopping:
+		return nil, ErrStopped
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", ErrNoSession, context.Cause(ctx))
+	case <-ended:
+		return nil, net.ErrClosed
+	default:
+	}
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	opened := make(chan result)
+	abandoned := make(chan struct{})
+	defer close(abandoned)
+	go func() {
+		conn, err := s.OpenStream()
+		select {
+		case opened <- result{conn, err}:
+		case <-abandoned:
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}()
+	var res result
+	select {
+	case res = <-opened:
+	case <-t.stopping:
+		return nil, ErrStopped
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", ErrNoSession, context.Cause(ctx))
+	case <-ended:
+		return nil, net.ErrClosed
+	}
+	select {
+	case <-t.stopping:
+		res.err = ErrStopped
+	case <-ctx.Done():
+		res.err = fmt.Errorf("%w: %w", ErrNoSession, context.Cause(ctx))
+	case <-ended:
+		res.err = net.ErrClosed
+	default:
+	}
+	if res.err != nil && res.conn != nil {
+		go res.conn.Close()
+		res.conn = nil
+	}
+	return res.conn, res.err
+}
+
 // Run keeps the tunnel up until ctx ends or until going on is pointless.
 //
 // The end of ctx is no error: nil. An error only when Run ends by itself: no resolver
 // completed a handshake on the first round (*NeverConnectedError), the exit refused the
-// login (exit.IsLogin) or is not a SOCKS5 server (exit.ErrNotSOCKS5). Every other failure
-// leads to the next attempt.
+// login (exit.IsLogin), is not a SOCKS5 server (exit.ErrNotSOCKS5), or FatalExit was called.
+// Every other session failure leads to the next attempt.
 //
 // If ctx comes from WithAbort (Interrupt), the second Ctrl+C cuts the stop short: Drain is
 // not waited for. On return the session is closed and the state is StateStopping.
@@ -263,10 +345,18 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 	if !t.running.CompareAndSwap(false, true) {
 		return errors.New("supervisor: Run called twice")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	t.mu.Lock()
+	t.cancelRun = cancel
+	if t.fatalErr != nil {
+		cancel()
+	}
+	t.mu.Unlock()
 	aborted := make(chan struct{})
 	var abortOnce sync.Once
 	defer OnAbort(ctx, func() { abortOnce.Do(func() { close(aborted) }) })()
-	defer func() { t.stop(err) }()
+	defer func() { err = t.stop(err) }()
 
 	pool := t.opts.Resolvers
 	prev := -1                  // the resolver dialed last; Next goes on after it
@@ -289,6 +379,9 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 		}
 		reason, restarted := unwatch()
 		switch {
+		case t.fatalCause() != nil:
+			closeSession(s)
+			return t.fatalCause()
 		case ctx.Err() != nil:
 			closeSession(s)
 			return nil
@@ -299,7 +392,13 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			continue
 		case s == nil:
 			// The dial failed: the next resolver at once, a delay after a full round.
+			t.mu.Lock()
+			if t.fatalErr != nil {
+				t.mu.Unlock()
+				return t.fatalCause()
+			}
 			pool.HandshakeFailed(i)
+			t.mu.Unlock()
 			round = append(round, ResolverFailure{name, err})
 			t.logf("%s: %v", name, err)
 			if len(round) < t.roundSize() {
@@ -331,11 +430,11 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 		round = nil
 		end := t.serve(ctx, name, s, took)
 		switch {
-		case end.stop:
-			t.beginStop()
+		case end.stop || t.fatalCause() != nil:
+			err := t.stop(nil)
 			t.drain(aborted)
 			s.Close()
-			return nil
+			return err
 		case end.restarted:
 			s.Close()
 			t.set(StateReconnecting, name, end.reason, 0)
@@ -343,7 +442,13 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			prev = -1
 		default:
 			s.Close()
+			t.mu.Lock()
+			if t.fatalErr != nil {
+				t.mu.Unlock()
+				return t.fatalCause()
+			}
 			pool.SessionEnded(i, end.lived)
+			t.mu.Unlock()
 			var delay time.Duration
 			if end.lived >= resolvers.ShortSession {
 				t.backoff.reset()
@@ -362,6 +467,9 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 // resolver is shown: its Name, and for the network entry with the server dialed.
 func (t *Tunnel) dialOnce(ctx context.Context, r resolvers.Resolver) (s Session, name string, took time.Duration, err error) {
 	name = r.Name()
+	if err := ctx.Err(); err != nil {
+		return nil, name, 0, err
+	}
 	if r.Network {
 		var server netip.Addr
 		if server, err = t.networkServer(); err != nil {
@@ -381,6 +489,9 @@ func (t *Tunnel) dialOnce(ctx context.Context, r resolvers.Resolver) (s Session,
 	hctx, cancel := context.WithTimeout(ctx, t.opts.HandshakeTimeout)
 	defer cancel()
 	start := t.now()
+	if err := hctx.Err(); err != nil {
+		return nil, name, 0, err
+	}
 	s, err = t.dial(hctx, cfg)
 	took = t.now().Sub(start)
 	if err != nil {
@@ -429,8 +540,18 @@ func (t *Tunnel) checkExit(ctx context.Context, s Session) error {
 	if t.opts.CheckExit == nil {
 		return nil
 	}
-	open := func(context.Context) (net.Conn, error) { return s.OpenStream() }
-	return t.opts.CheckExit(ctx, open)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	open := func(ctx context.Context) (net.Conn, error) { return t.openSession(ctx, s, s.Done()) }
+	checked := make(chan error, 1)
+	go func() { checked <- t.opts.CheckExit(ctx, open) }()
+	select {
+	case err := <-checked:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // end is how a session ended: stop — ctx ended; restarted — Restart with reason;
@@ -447,6 +568,10 @@ func (t *Tunnel) serve(ctx context.Context, name string, s Session, took time.Du
 	l := &live{s: s, ended: make(chan struct{})}
 	start := t.now()
 	t.mu.Lock()
+	if t.fatalErr != nil || ctx.Err() != nil {
+		t.mu.Unlock()
+		return end{stop: true}
+	}
 	t.live, t.since, t.handshake = l, start, took
 	close(t.ready)
 	t.mu.Unlock()
@@ -493,12 +618,17 @@ func (t *Tunnel) serve(ctx context.Context, name string, s Session, took time.Du
 // pause waits delay before the next attempt in StateReconnecting. Restart cuts it short;
 // then it clears the backoff and the health and reports true.
 func (t *Tunnel) pause(ctx context.Context, name string, cause error, delay time.Duration) bool {
+	if ctx.Err() != nil || t.fatalCause() != nil {
+		return false
+	}
 	t.set(StateReconnecting, name, cause, delay)
 	if cause != nil {
 		t.logf("%s: %v", name, cause)
 	}
 	wctx, unwatch := t.watchRestart(ctx)
-	t.sleep(wctx, delay)
+	if wctx.Err() == nil {
+		t.sleep(wctx, delay)
+	}
 	reason, restarted := unwatch()
 	if restarted && ctx.Err() == nil {
 		t.restarted(reason)
@@ -509,13 +639,19 @@ func (t *Tunnel) pause(ctx context.Context, name string, cause error, delay time
 
 // restarted carries out Restart: a new network — new counts.
 func (t *Tunnel) restarted(reason error) {
-	if reason != nil {
-		t.logf("restarting: %v", reason)
+	t.mu.Lock()
+	if t.fatalErr != nil {
+		t.mu.Unlock()
+		return
 	}
 	t.backoff.reset()
 	t.opts.Resolvers.Reset()
 	if t.opts.Bootstrap != nil {
 		t.opts.Bootstrap.Forget()
+	}
+	t.mu.Unlock()
+	if reason != nil {
+		t.logf("restarting: %v", reason)
 	}
 }
 
@@ -569,22 +705,31 @@ func (t *Tunnel) drain(aborted <-chan struct{}) {
 	t.opts.Drain(ctx)
 }
 
-// beginStop refuses new streams: the tunnel is stopping.
-func (t *Tunnel) beginStop() {
+// stop commits the stopping cause before draining. FatalExit and cancellation are ordered
+// by mu, so a fatal error already reported wins in both the transition and Run's result.
+func (t *Tunnel) stop(err error) error {
+	t.mu.Lock()
+	if t.fatalErr != nil {
+		err = t.fatalErr
+	}
+	from := t.state
+	t.state = StateStopping
 	t.stoppingOnce.Do(func() { close(t.stopping) })
-	t.set(StateStopping, "", nil, 0)
-}
-
-// stop is the end of Run.
-func (t *Tunnel) stop(err error) {
-	t.stoppingOnce.Do(func() { close(t.stopping) })
-	t.set(StateStopping, "", err, 0)
+	t.mu.Unlock()
+	if from != StateStopping && t.opts.OnTransition != nil {
+		t.opts.OnTransition(Transition{From: from, To: StateStopping, Cause: err})
+	}
+	return err
 }
 
 // set changes the state and reports the transition. A move into the same state is no
 // transition, except a new resolver while dialing.
 func (t *Tunnel) set(to State, resolver string, cause error, delay time.Duration) {
 	t.mu.Lock()
+	if t.fatalErr != nil {
+		t.mu.Unlock()
+		return
+	}
 	from, was := t.state, t.resolver
 	if from == to && (to != StateDialing || was == resolver) {
 		t.mu.Unlock()

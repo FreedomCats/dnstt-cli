@@ -14,6 +14,7 @@ import (
 
 	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
 
@@ -136,20 +137,40 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	select {
 	case err := <-errCh:
 		cancel()
-		return err
+		return finishConnect(err, prof.Exit.Type, dp, abortCh)
 	case <-ctx.Done():
 		// Clean shutdown requested.
 		cancel()
 		// Wait for the supervisor to finish, but abort on second Ctrl+C.
 		select {
 		case err := <-errCh:
-			return err
+			return finishConnect(err, prof.Exit.Type, dp, abortCh)
 		case <-abortCh:
 			// Second Ctrl+C: force immediate exit.
 			dp.Close()
 			return <-errCh
 		}
 	}
+}
+
+// A fatal HTTP refusal may stop Run before the application goroutine sends its SOCKS5
+// failure. Give accepted handshakes the usual shutdown limit without delaying FatalExit.
+func finishConnect(err error, exitType string, dp interface{ Close() error }, aborted <-chan struct{}) error {
+	if exitType == "http" && exit.IsLogin(err) {
+		if s, ok := dp.(interface{ Shutdown(context.Context) error }); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), supervisor.DefaultDrainTimeout)
+			defer cancel()
+			go func() {
+				select {
+				case <-aborted:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			_ = s.Shutdown(ctx)
+		}
+	}
+	return err
 }
 
 func isTerminal(w io.Writer) bool {
