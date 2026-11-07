@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -95,3 +95,42 @@ user's server, so that a failure can be told apart.
   fallback. On Windows, `-upstream` points to a checkout outside this repository.
 - Authenticated SOCKS5 and HTTP user runs, including their resolvers, belong to the later
   live-runs stage. No live profile, credential or run result is part of this node.
+
+## Outcome
+
+The preserved local SOCKS5 baseline is accepted after a fresh code review and local
+recheck. Its source and tests remain under ignored `doc/runs/_live/`; no implementation
+changes were required. Acceptance used isolated synthetic configuration and loopback,
+without reading or changing a real profile or secret store.
+
+- The saved tool provides `compare`, `secret`, `selftest` and help. The upstream process
+  and in-process application run serially with the same selected resolver; the probe uses
+  an independent SOCKS5 client. Password storage verifies read-back and leaves the profile
+  file unchanged. Safe loader diagnostics and private log filtering retain their focused
+  synthetic tests.
+- The coordinator repeated the SOCKS5 selftest: upstream and `dnstt-cli` both fetch the
+  complete expected page while the local server runs, then both fail with verdict
+  `not dnstt-cli` after it stops. The generated identity is absent from captured output
+  and checked logs. Captures and run logs remain outside git.
+- The local README now separates this baseline's local acceptance from the later live
+  gate, preserves the SOCKS5 setup and comparison instructions, and documents the CI vet
+  split and Windows runtime limitations.
+- Tool vet passes for Linux and Windows, and its explicit race suite passes. The project
+  build and full race suite pass, including the mandatory isolated D-Bus tests. The CI
+  vet split passes with all checks enabled outside `core/` and
+  `-testinggoroutine=false` only for `core/`. Plain project vet retains only the two
+  existing upstream warnings in `core/noise/noise_test.go:158,209`.
+- Windows cross-builds of the tool and product and test compilation for the tool and all
+  applicable product packages pass. Windows binaries were not run.
+- Focused tests retain safe profile-loader diagnostics, secret-store read-back and
+  private log checks. The fresh review found no defects. The tool remains ignored and
+  excluded from `go list ./...`; checks changed no tracked files. This commit records
+  only this roadmap node.
+- The upstream revision remains unverifiable with the available source, and the selftest
+  emits the expected warning. Different default uTLS distributions remain a documented
+  comparison caveat; an explicit upstream-compatible shared distribution can be selected.
+
+HTTP product support and HTTP comparison remain separate children. Authenticated user
+runs remain required in `04-live-runs`; neither loopback selftest nor Windows
+cross-compilation establishes live or Windows runtime acceptance. Real setup stays
+deferred until HTTP product support is accepted.
