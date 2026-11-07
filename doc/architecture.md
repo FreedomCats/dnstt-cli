@@ -78,12 +78,14 @@ listener and the `tun` adapter live the whole `connect`.
 **Why.** Without it the upstream client stops working until a manual restart after any
 long break (`analysis.md`, §1).
 
-### R3. The server's exit: SOCKS5 first, SSH second
+### R3. The server's exit: SOCKS5, HTTP CONNECT and SSH
 
 Every stream starts with a handshake to whatever the server hands it to:
 
 - **`socks5`** — RFC 1928 `CONNECT` with a domain or an address; authentication "none" or
   username/password (RFC 1929). The priority case: a server with `danted` and a login.
+- **`http`** — HTTP/1.1 `CONNECT` with an authority and optional Basic authentication. The
+  server hands the stream to the fixed HTTP proxy service; target names are resolved there.
 - **`ssh`** — one SSH connection inside one stream, `direct-tcpip` channels for
   connections, password or key authentication, the server host key pinned in the profile.
   A second stage.
@@ -181,8 +183,9 @@ resolver of the profile and prints the time or the reason; exit code 1 if none p
 
 As in csqtt-cli: `profiles.toml` holds no secrets. Exit passwords and SSH keys go to DPAPI
 on Windows and the Secret Service keyring on Linux, without a keyring — to `secrets.json`
-with mode `0600`. The domain and the server key are not secrets but are sensitive: they
-stay in the profile and are never printed in logs in full.
+with mode `0600`. SOCKS5 passwords and HTTP proxy Basic passwords use the existing
+`exit.user` and `exit.password_ref` fields. The domain and the server key are not secrets
+but are sensitive: they stay in the profile and are never printed in logs in full.
 
 ### R9. Profile links: import of `slipnet://`
 
@@ -211,7 +214,7 @@ dnstt-cli/
 ├── internal/
 │   ├── cli/                   // connect · resolvers · profile · menu · wizard · privileges
 │   ├── config/                // profiles · validation · secrets · links
-│   ├── exit/                  // NEW · SOCKS5 client (RFC 1928/1929) · SSH (E5)
+│   ├── exit/                  // NEW · SOCKS5 (RFC 1928/1929) · HTTP CONNECT/Basic · SSH (E5)
 │   ├── datapath/
 │   │   ├── datapath.go        // Requirements · Persistent · Reserver · DNSGuard
 │   │   ├── socks.go           // SOCKS5 server on loopback → exit
@@ -292,7 +295,8 @@ func (s *Session) Close() error
   and two timeouts after the last data.
 
 The exit sits on top: `exit.Dialer` turns a stream into a connection to `host:port`
-(SOCKS5 `CONNECT`, SSH `direct-tcpip`). Datapaths see only `exit.Dialer`.
+(SOCKS5 `CONNECT`, HTTP/1.1 `CONNECT`, SSH `direct-tcpip`). Datapaths see only
+`exit.Dialer`.
 
 `core/server/testing.go` starts the upstream server `run` in-process on loopback UDP with a
 generated key; the session tests run against it.
@@ -474,10 +478,15 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
   timeout (20 s for now, to be measured on the live server). A timeout or error moves to
   the next resolver at once; a full round without success — backoff `1·2^n` s up to 64 s,
   as in csqtt-cli.
-- **Connected** — a finished handshake and a checked exit: every new session logs in to
-  the exit without a request (`exit.SOCKS5.Check`) before it counts. A SOCKS5 login refusal
-  and an exit that does not answer as SOCKS5 are final (`Stopping`) with a clear message:
-  another attempt gets the same answer. An exit that breaks the stream is a retry.
+- **Connected** — a finished handshake and the exit readiness check. For `socks5`, every
+  new session logs in without a request (`exit.SOCKS5.Check`) before it counts. A SOCKS5
+  login refusal and an exit that does not answer as SOCKS5 are final (`Stopping`); an exit
+  that breaks the stream is a retry. For `http`, there is no hidden startup target or
+  startup stream: `Connected` means tunnel readiness only. The first real application
+  `CONNECT` performs Basic authentication. A final HTTP 407 is a fatal login refusal and
+  moves the supervisor to `Stopping` without resolver penalty or redial. Other HTTP
+  connection refusals and protocol errors remain per-stream failures rather than fatal
+  login errors; actual tunnel-session failures follow normal recovery.
 - **Session end** — a session that died by itself counts against its resolver if it lived
   less than a minute (R5) and waits the next backoff delay; one that lived longer clears
   the backoff and is redialed at once. The same resolver is tried first.
@@ -538,7 +547,7 @@ kill_switch  = true                             # tun: traffic closed while the 
 tun_dns      = "1.1.1.1"                        # DNS behind the server for tun (R7)
 
 [profile.home.exit]
-type         = "socks5"                         # socks5 | ssh
+type         = "socks5"                         # socks5 | http | ssh
 user         = "user"                           # empty — no authentication
 password_ref = "secretservice:…"                # the exit password lives in the secret store
 
