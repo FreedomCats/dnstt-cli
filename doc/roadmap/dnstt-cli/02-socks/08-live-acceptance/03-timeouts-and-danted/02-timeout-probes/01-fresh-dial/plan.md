@@ -1,6 +1,6 @@
 ---
 kind: task
-status: blocked
+status: done
 detailed: true
 depends: [03-dot-context]
 ---
@@ -156,29 +156,95 @@ samples. Actual transport evidence and timeout/recovery decisions remain in
 [Live timeout measurements](../../05-timeout-measurements/plan.md); the known signal-reader
 follow-up stays separate unless this work demonstrates a new regression.
 
-## Approved prerequisite
+## Accepted prerequisite and resumed acceptance
 
-The local command is implemented and its scoped review corrections pass, but full
-acceptance is withheld. Initial DoT setup does not honor the caller's context:
-`core/client/tls.go` creates an independent background timeout before returning the
-transport, and `core/client/utls.go` performs a context-free TLS handshake. A silent
-TLS peer can outlive the requested observation limit or interruption before a session
-is returned for cleanup. Synthetic loopback reproductions confirm both paths.
+The local command was implemented and its scoped review corrections passed, but full
+acceptance was withheld because initial DoT setup did not honor the caller's context:
+`core/client/tls.go` created an independent background timeout before returning the
+transport, and `core/client/utls.go` performed a context-free TLS handshake. A silent
+TLS peer could outlive the requested observation limit or interruption before a session
+was returned for cleanup. Synthetic loopback reproductions confirmed both paths.
 
 This is a pre-existing core dependency defect, not an accepted exception to the command's
 deadline/lifecycle criteria. The user authorized the separate
 [context-aware initial DoT prerequisite](../03-dot-context/plan.md), including the uTLS
 handshake, maintained vendor rules/templates and regression checks. The sibling dependency
 selects that task first without renaming this active node. This command task remains
-tool-only; its deadline and interruption criteria are unchanged. The prerequisite must
-preserve successful-session lifetime and later redial/close behavior. Weakening the
+tool-only; its deadline and interruption criteria are unchanged. The prerequisite preserved
+successful-session lifetime and later redial/close behavior. Weakening the
 measurement contract was rejected. A detached goroutine around
 `client.Dial` would lose ownership and is not a safe tool-only workaround.
 
-Preserve the ignored implementation and completed review work. Keep this task blocked
-until the prerequisite is independently accepted by its separate coordinator. Then resume
-this command's saved implementation/review and recheck actual DoT dial-limit and interruption
-paths for standard TLS and `Firefox_120` against silent loopback fixtures, retaining and
-joining every attempt. Revalidate affected integration checks after the core change before
-claiming full acceptance; do not recreate or modify the saved tool as part of the core task.
-No live evidence is established by this prerequisite decision.
+The prerequisite is independently accepted and committed as `c11a40c`. This command's saved
+implementation and review resumed under unchanged criteria, with all 20 tool files kept
+byte-identical. Final command-specific DoT dial-limit and interruption checks pass for
+standard TLS and `Firefox_120` against silent loopback fixtures, retaining and joining
+every attempt. The prerequisite's reviewed final matrix was reused only where sources and
+build inputs match; affected command checks were independently executed before this task's
+acceptance. No live evidence is established by the prerequisite or these local checks.
+
+## Outcome
+
+The existing ignored tool now provides `timeout-dial`: a numbered series of fresh raw
+Noise dials through exactly one selected resolver, initially ten attempts, with required
+positive run-only dial and keepalive observation limits. Help and the existing README
+measurement section provide executable reserved DoH, DoT and UDP examples, result codes,
+complete private-record instructions and explicit repetition without discarding a clipped
+series. No timeout policy or new profile field was selected.
+
+Raw preparation uses the read-only profile loader and existing resolver APIs, preserving
+the effective selection's pins, literal-address behavior, original TLS hostname, profile
+or override uTLS, R5 bootstrap precedence and standard cache. The first system DNS server
+for `network` is fixed for the series. No eager lookup, transport warm-up, supervisor,
+secret lookup/store, exit stream, target or upstream executable participates in the command.
+An unavailable but valid synthetic password reference does not block Noise-only sampling.
+
+Each attempted sample times exactly one `client.Dial` from immediately before invocation
+through return, including its bootstrap and transport work. Actual nanosecond durations,
+all observation limits, private conditions, outcome/censoring flags and separate session-end
+and closure results survive in the evidence. Returned results are recorded before cleanup;
+every returned session requires both `Close` return and `Done` before another attempt.
+Failed attempts retain their ordinals. Interruption, uncertain cleanup and deadline/session
+races stop conservatively with attempted, failed, censored, interrupted and unstarted counts.
+Write, short-write, output and log-close errors prevent a saved-evidence completion claim.
+
+Two accepted review findings were fully corrected: command-local filtering now hides bare
+and normalized IPv6 bootstrap addresses from verbose output while retaining private mapping;
+effective bootstrap deduplication and an encoded record-size guard prevent mandatory evidence
+from silently disappearing at the logger's line bound. Oversized conditions stop before any
+dial, preserve partial counts and cannot claim saved evidence. Real-logger boundary/privacy
+regressions pass. No finding was rejected and no correction was deferred because of cost.
+
+The initial DoT limitation was resolved in the separate user-approved prerequisite rather
+than weakening this command's criteria or abandoning in-flight results. Final independent
+review approves all eight Steps and Done when. Fresh focused race checks pass for every
+raw-session/timeout test group, including generated-key loopback sessions, distinct fresh
+dials, stream-free operation, read-only profiles, close-before-next ordering, deterministic
+longer observation controls, races and cleanup/evidence failures. Actual-command silent DoT
+series pass deadlines and real interruption in both TLS variants; complete records, partial
+counts, client-closed connections, joined fixtures and fully waited processes were verified.
+
+The final accepted core and unchanged tool match the reviewed matrix inputs. Verified current
+evidence covers the complete explicit tool and applicable project race suites, all twenty
+mandatory isolated D-Bus/keyring cases without skips, static builds, the exact Linux/Windows
+CI vet split, explicit tool vet and vendor checks. Windows product/tool builds and all
+nineteen applicable project test-package compilations plus the tool pass; retained artifacts
+were verified without claiming repeated independent cross-builds or Windows execution.
+The both-exit selftest passes HTTP/HTTPS with the server up, its existing HTTPS-only down
+loop and filtering assertions. Its former unavailable-upstream-revision warning is absent
+with the accepted verified source. Matching broad checks were retained rather than repeated
+without changed inputs or an unresolved concern.
+
+Exactly the four specified external TCP/DNS tests are excluded, with netns checks disabled;
+`TestDNSGuardPermitsPrograms` is compilation-only. Formatting, whitespace, relative links,
+English, privacy, Git ignore and package-list exclusion checks pass. Implementation, README,
+snapshots and captures remain ignored; only this task's roadmap record is committed.
+No product/core/API/dependency change belongs to this command task. No real configuration
+or store access, external resolver/service, network/trust mutation, live measurement,
+healthy-idle qualification, danted result or Windows runtime/DPAPI acceptance is claimed.
+
+The private raw preparation, dial/runtime adapter and explicit close/Done helper are ready
+for the separately scoped idle observer. The pre-existing CLI signal-reader follow-up and
+the source-confirmed, not runtime-reproduced `sockets.track`/`trackedConn.Close` ownership-lock
+path remain unchanged and separate. Neither is a correction deferred because of cost.
+Lead retains parent-stage reconciliation and all later idle, service and policy gates.
