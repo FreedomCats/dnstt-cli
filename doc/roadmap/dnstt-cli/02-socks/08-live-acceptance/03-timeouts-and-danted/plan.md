@@ -86,6 +86,16 @@ HTTP success.
   They must not read, stat or modify actual profile/config/secret data or metadata, dump
   inherited environment, or call live services or resolvers. Changes to the user's service
   or network require their own authorization.
+- The user authorized one narrow exception to the timeout probes' no-core-change boundary:
+  the separate [context-aware initial DoT prerequisite](02-timeout-probes/03-dot-context/plan.md)
+  repairs caller-context propagation and the uTLS handshake, with maintained vendor
+  rules/templates and regressions. Only that prerequisite may change core/vendor sources;
+  both probe-command tasks remain tool-only. Preserve successful-session independent
+  lifetime and later redial/close behavior. This authorizes no new public API, dependency,
+  profile field, timeout value, weaker TLS verification or changed fingerprint behavior.
+  It does not change the measurement method, observation-limit/interruption criteria or
+  any live goal or gate; a newly necessary enduring interface/dependency requires a user
+  question through lead before proceeding.
 - Timeout selection includes its derivation rule and the visible stability/recovery
   tradeoff, with smux's timeout-check scheduling included. Obtain the user's decision before
   applying the values. R2's approximate 30 s is not measurement evidence or an approved

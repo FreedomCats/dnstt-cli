@@ -2,6 +2,7 @@
 kind: task
 status: blocked
 detailed: true
+depends: [03-dot-context]
 ---
 
 # Fresh Noise dial command
@@ -155,7 +156,7 @@ samples. Actual transport evidence and timeout/recovery decisions remain in
 [Live timeout measurements](../../05-timeout-measurements/plan.md); the known signal-reader
 follow-up stays separate unless this work demonstrates a new regression.
 
-## Pending user decision
+## Approved prerequisite
 
 The local command is implemented and its scoped review corrections pass, but full
 acceptance is withheld. Initial DoT setup does not honor the caller's context:
@@ -165,12 +166,19 @@ TLS peer can outlive the requested observation limit or interruption before a se
 is returned for cleanup. Synthetic loopback reproductions confirm both paths.
 
 This is a pre-existing core dependency defect, not an accepted exception to the command's
-deadline/lifecycle criteria. The current task expressly forbids core changes. The user
-must choose whether to authorize a separate prerequisite for context-aware initial DoT
-and uTLS setup, including maintained vendor rules/templates and regressions, or explicitly
-weaken the measurement contract. The recommended prerequisite preserves the current
-criteria and successful-session lifetime; a detached goroutine around `client.Dial`
-would lose ownership and is not a safe tool-only workaround.
+deadline/lifecycle criteria. The user authorized the separate
+[context-aware initial DoT prerequisite](../03-dot-context/plan.md), including the uTLS
+handshake, maintained vendor rules/templates and regression checks. The sibling dependency
+selects that task first without renaming this active node. This command task remains
+tool-only; its deadline and interruption criteria are unchanged. The prerequisite must
+preserve successful-session lifetime and later redial/close behavior. Weakening the
+measurement contract was rejected. A detached goroutine around
+`client.Dial` would lose ownership and is not a safe tool-only workaround.
 
-No prerequisite is authorized yet. Preserve the ignored implementation and its completed
-review work, keep this task blocked and do not claim full acceptance or live evidence.
+Preserve the ignored implementation and completed review work. Keep this task blocked
+until the prerequisite is independently accepted by its separate coordinator. Then resume
+this command's saved implementation/review and recheck actual DoT dial-limit and interruption
+paths for standard TLS and `Firefox_120` against silent loopback fixtures, retaining and
+joining every attempt. Revalidate affected integration checks after the core change before
+claiming full acceptance; do not recreate or modify the saved tool as part of the core task.
+No live evidence is established by this prerequisite decision.

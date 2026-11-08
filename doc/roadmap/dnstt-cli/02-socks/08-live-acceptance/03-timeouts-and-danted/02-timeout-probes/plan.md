@@ -13,12 +13,27 @@ These are independently testable local instrumentation results, not live measure
 changes to product timeout policy. Their user-run output feeds
 [Live timeout measurements](../05-timeout-measurements/plan.md).
 
-Keep the change under `doc/runs/_live/`: the command entry in `main.go`, focused new timing
-and session-helper files/tests, and `README.md`. Reuse existing safe profile/resolver
-selection and logging. Construct raw `client.Config`/`client.Dial` sessions with the same
+Keep probe-command changes under `doc/runs/_live/`: the command entry in `main.go`, focused
+new timing and session-helper files/tests, and `README.md`. Reuse existing safe
+profile/resolver selection and logging. Construct raw `client.Config`/`client.Dial` sessions with the same
 R5 pin/bootstrap rules; do not funnel measurements through the supervisor's preliminary
 20 s or treat `StateConnected` as Noise timing. No new public core API is assumed:
 `Session.Stats().BytesReceived` already exposes receive progress.
+
+## Approved core prerequisite
+
+The user authorized a separate [context-aware initial DoT task](03-dot-context/plan.md)
+after silent-loopback checks exposed a pre-existing core cancellation defect. It is the
+sole exception to this stage's previous no-core/vendor-change restriction: the command
+children and their criteria remain tool-only. The prerequisite restores the existing
+`client.Dial(ctx, cfg)` contract through initial bootstrap/TCP/TLS and the shared uTLS
+handshake, without changing successful-session lifetime or subsequent redial/close
+behavior. No new public API or dependency is approved or assumed necessary.
+
+The instrumentation goals and Done when below are unchanged. They do not permit weaker
+observation limits, abandonment of an eventual `Dial` result, new product timeout policy
+or substitute live evidence. The prerequisite is reviewed and accepted independently,
+then the preserved fresh-dial implementation is resumed under its original criteria.
 
 ## Children
 
@@ -28,9 +43,16 @@ R5 pin/bootstrap rules; do not funnel measurements through the supervisor's prel
 2. [Healthy-idle observation command](02-idle-observation/plan.md) — one-session receive
    tracing and conservative gap estimation, with independent sequential SOCKS5/target
    checks outside the window and synthetic regressions. Task; depends on the first child.
+3. [Context-aware initial DoT setup and uTLS handshakes](03-dot-context/plan.md) — the
+   separately authorized core/vendor prerequisite, including maintained regressions.
+   Task; must be accepted before fresh-dial can finish.
 
-Each child includes its command integration, focused tests and README instructions as
-one usable instrumentation result. The second reuses the first's raw-session setup and
+The next free number preserves the active command's path. Execution order is
+`03-dot-context` → `01-fresh-dial` → `02-idle-observation`, enforced by sibling dependencies;
+the core task does not depend on acceptance of the tool it unblocks.
+
+Each command child includes its command integration, focused tests and README instructions
+as one usable instrumentation result. The second reuses the first's raw-session setup and
 lifecycle; neither child redefines the accepted method or fills the private evidence
 form with results. The later one-write probe can reuse the same raw-session helper.
 

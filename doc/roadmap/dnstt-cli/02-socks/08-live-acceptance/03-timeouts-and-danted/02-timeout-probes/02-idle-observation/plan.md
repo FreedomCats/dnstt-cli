@@ -17,6 +17,11 @@ Follow the [parent stage](../plan.md) and accepted
 [measurement method](../../01-measurement-method/plan.md); the later
 [user-run measurements](../../05-timeout-measurements/plan.md) own live evidence and policy.
 
+The existing dependency on fresh-dial also gates this task on the separately accepted
+[initial DoT core prerequisite](../03-dot-context/plan.md). Reuse its restored dial-context
+contract, not an additional core change or weaker observation/cancellation behavior here.
+The command's scope and Done when below remain unchanged.
+
 Expected change: `main.go`, focused new `timeout_idle.go`, `idle_trace.go` and tests,
 an independent raw-stream SOCKS5 verification adapter if needed, `README.md` and a small
 extension of `raw_session.go` if required. Keep this within roughly ten tool files.
