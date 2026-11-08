@@ -81,7 +81,7 @@ func to(s string) *string { return &s }
 
 // rules are the patches. The package and import conversion is done by convertGo, not by
 // rules.
-var rules = slices.Concat(p1Rules, p2Rules, p5Rules, logfRules, serverRules)
+var rules = slices.Concat(p1Rules, p2Rules, p5Rules, logfRules, contextRules, serverRules)
 
 var p1Rules = []rule{
 	// P1: every socket of the core comes from the dialer of the session (§06). uTLS
@@ -258,6 +258,35 @@ func transportLogf(file string, calls int, from, sig, literal string) []rule {
 		{File: file, Count: calls, Pattern: `()\blog\.Printf\(`, Replace: to("c.logf(")},
 		{File: file, Count: 1, Pattern: `(?m)^()\t"log"\n`, Replace: to("")},
 	}
+}
+
+// Initial DoT setup uses the caller's context, while redials keep their independent
+// per-attempt timeout. These rules follow transportLogf so both constructors take logf.
+var contextRules = []rule{
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern: `(?m)^()func NewTLSPacketConn\(addr string, dialTLSContext func\(ctx context\.Context, network, addr string\) \(net\.Conn, error\), logf func\(format string, args \.\.\.any\)\) \(\*TLSPacketConn, error\) \{$`,
+		Replace: to(`func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+	return newTLSPacketConn(ctx, addr, dialTLSContext, logf)
+}
+
+// newTLSPacketConn uses ctx only for the initial dial (dnstt-cli). The exported
+// constructor keeps its legacy initial timeout; session setup supplies its caller's ctx.
+// Successful connections and later redials have an independent lifetime.
+func newTLSPacketConn(ctx context.Context, addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {`),
+	},
+	{
+		File: "client/tls.go", Count: 1,
+		Pattern: `(?m)^(\t)// reported directly to the caller of NewTLSPacketConn\.\n\tconn, err := dial\(\)$`,
+		Replace: to("${1}// reported directly to the caller. Only redials use the timeout above.\n${1}conn, err := dialTLSContext(ctx, \"tcp\", addr)"),
+	},
+	{
+		File: "client/utls.go", Count: 1,
+		Pattern: `(?m)^(\t)err = uconn\.Handshake\(\)$`,
+		Replace: to("${1}// Bound the eager handshake by the caller's setup context (dnstt-cli).\n${1}err = uconn.HandshakeContext(ctx)"),
+	},
 }
 
 // serverRules: the server is built only into the tests of the client

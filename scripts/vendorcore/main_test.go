@@ -104,6 +104,79 @@ func TestConvertGo(t *testing.T) {
 	}
 }
 
+func TestContextRules(t *testing.T) {
+	constructor := "func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {\n"
+	initial := "\t// reported directly to the caller of NewTLSPacketConn.\n\tconn, err := dial()\n"
+	for _, tc := range []struct {
+		file, input string
+		want        []string
+	}{
+		{"client/tls.go", constructor + initial, []string{
+			constructor,
+			"context.WithTimeout(context.Background(), dialTimeout)",
+			"return newTLSPacketConn(ctx, addr, dialTLSContext, logf)",
+			"func newTLSPacketConn(ctx context.Context,",
+			"conn, err := dialTLSContext(ctx, \"tcp\", addr)",
+		}},
+		{"client/utls.go", "\terr = uconn.Handshake()\n", []string{"\terr = uconn.HandshakeContext(ctx)\n"}},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			withRules(t, contextRules...)
+			got, err := applyRules(tc.file, tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// Constructor factoring runs after transportLogf. Losing either initial-context rule
+// or the eager handshake patch on source drift must fail rather than silently regress.
+func TestContextRuleCounts(t *testing.T) {
+	inputs := []string{
+		"func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {\n",
+		"\t// reported directly to the caller of NewTLSPacketConn.\n\tconn, err := dial()\n",
+		"\terr = uconn.Handshake()\n",
+	}
+	for i, r := range contextRules {
+		for _, count := range []int{0, 2} {
+			t.Run(fmt.Sprintf("rule%d/count%d", i, count), func(t *testing.T) {
+				withRules(t, r)
+				_, err := applyRules(r.File, strings.Repeat(inputs[i], count))
+				if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("found %d", count)) {
+					t.Errorf("mandatory-count error: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestContextTemplates(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, name := range []string{"transport.go", "tls_context_test.go", "redial_test.go", "utls_test.go"} {
+		maintained := read(t, filepath.Join(root, addedDir, "client", name))
+		generated := read(t, filepath.Join(root, "core", "client", name))
+		if maintained != generated {
+			t.Errorf("client/%s differs from its maintained template", name)
+		}
+	}
+	transport := read(t, filepath.Join(root, addedDir, "client", "transport.go"))
+	for _, want := range []string{
+		"newTLSPacketConn(ctx, r.Address, dialTLS, cfg.Logf)",
+		"stop := context.AfterFunc(s.ctx, cancel)\n\t\t\tdefer stop()",
+		"conn.HandshakeContext(ctx)",
+	} {
+		if !strings.Contains(transport, want) {
+			t.Errorf("transport template lost %q", want)
+		}
+	}
+}
+
 // --- transfer from a fake upstream ---------------------------------------------------
 
 func write(t *testing.T, path, text string) {

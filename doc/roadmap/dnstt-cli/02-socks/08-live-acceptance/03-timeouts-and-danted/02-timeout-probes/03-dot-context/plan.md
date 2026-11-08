@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -240,3 +240,63 @@ The completed download was separately authorized and does not authorize further 
 fetches. The core repair, functional scope and validation matrix remain unchanged; no
 upstream version, API, format or dependency change is included. Fresh-dial stays blocked
 until this prerequisite is independently accepted under its existing criteria.
+
+## Outcome
+
+Initial DoT setup now carries the `client.Dial` caller's context through lookup, TCP and
+TLS for standard TLS and uTLS. The exported `NewTLSPacketConn` retains its signature and
+legacy initial timeout; a private constructor uses the caller's context directly, without
+the former hidden 30-second cap. Later redials keep their independent per-attempt timeout
+and P2 backoff. A temporary socket-lifetime bridge covers the complete DoT setup attempt
+and is detached on return. The eager shared uTLS handshake uses `HandshakeContext(ctx)`.
+The DoT adapter also returns a genuine nil connection on uTLS errors, avoiding a typed-nil
+cleanup panic exposed by the teardown regressions.
+
+The repair and regressions are maintained in vendor rules and templates, with generated
+mirrors. Three mandatory-count rules and one maintained test file increase the recorded
+counts to 33 files, 41 rules and 12 added files; upstream revision, date and version stay
+unchanged. Verified Git input resolved the original preflight blocker without metadata
+substitution or a generator change. Normal regeneration, its second byte-identical pass,
+template mirrors, source-drift failures, socket guard and `vendorcore -check` pass.
+
+Bounded pre-fix regressions reproduced all four silent accepted-peer failures: standard
+TLS and `Firefox_120`, each with a deadline and explicit cancellation. The same cases now
+complete with the expected wrapped context error and owned cleanup. Additional tests cover
+pre-ended contexts, pending lookup and initial callback, propagation of a deadline beyond
+30 seconds without waiting for it, and the unchanged legacy/redial timeout. Generated-trust
+DoT/Noise sessions retain stream data after canceling the completed dial's context and
+after a forced transport redial. Close tests finish pending lookup, TCP and silent TLS
+redial work, empty ownership and stop transport loops. Trust is isolated to test-local
+pools or a child process. Certificate rejection, original SNI, hooks, fingerprints, ALPN
+and the shared DoH HTTP/1.1/HTTP/2 paths pass, including failed setup and closure.
+
+Independent review found no task findings or introduced regressions. It independently ran
+the focused and complete core/vendor races, full applicable project race suite, explicit
+tool race suite, static builds, exact Linux/Windows CI vet split, tool vet, read-only vendor
+check and both-exit loopback selftest. All 20 mandatory isolated Secret Service/keyring cases
+pass without skips. Windows product/tool cross-builds and compilation of all 19 applicable
+project test packages plus the tool pass; review verified those retained artifacts and the
+final regression symbols. The coordinator verified the reviewed file hashes and no-op
+generation manifest. There were no rejected findings or cost-deferred corrections.
+
+All 20 saved ignored-tool files remain byte-identical. The actual-command silent DoT smoke
+passes deadline and interruption for both TLS variants, but command acceptance remains
+separate. The unchanged selftest verifies both exits with HTTP/HTTPS while the server is
+up and HTTPS after shutdown; no additional HTTP-down claim is made. Its former unavailable-
+revision warning is absent with the verified Git input.
+
+The full race suite excludes exactly the four specified external TCP/DNS cases, with netns
+tests disabled. `TestDNSGuardPermitsPrograms` is compilation-only. No real configuration or
+store access, external resolver/service, network or trust mutation, live measurement,
+Windows runtime or DPAPI acceptance was performed. No API, dependency, profile field,
+fingerprint, timeout policy, observation criterion or HTTP/SOCKS5 decision changed.
+
+An incidental pre-existing follow-up remains in `core/client/transport.go`: when closure
+wins just before tracking a connected TCP socket, `sockets.track` can close a `trackedConn`
+while holding the mutex that `trackedConn.Close` reacquires through `forget`. Source review
+confirmed the unchanged baseline path; it was not runtime-reproduced, introduced or worsened
+by this repair and stays separate. The existing CLI signal-reader follow-up is also
+unchanged. Neither is a correction deferred because of cost.
+
+This prerequisite is accepted independently. Lead still owns resuming fresh-dial under its
+unchanged criteria and all later idle/live and platform acceptance gates.

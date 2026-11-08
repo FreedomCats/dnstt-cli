@@ -239,6 +239,59 @@ func TestDoTRedialStopsOnClose(t *testing.T) {
 	}
 }
 
+func TestDoTRedialContextBoundary(t *testing.T) {
+	shortRedial(t)
+	peer := newTLSPeer(t, func(c net.Conn) { io.Copy(c, c) })
+	s := newSockets(&Config{})
+	t.Cleanup(s.closeAll)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	redialed := make(chan context.Context, 8)
+	var mu sync.Mutex
+	initial := true
+	callback := func(got context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		first := initial
+		initial = false
+		mu.Unlock()
+		if first {
+			if got != ctx {
+				t.Error("initial callback did not receive caller context")
+			}
+		} else {
+			limit, ok := got.Deadline()
+			if left := time.Until(limit); !ok || left > dialTimeout || left < dialTimeout-time.Second {
+				t.Errorf("redial timeout: %v (%v)", left, ok)
+			}
+			if got.Err() != nil || got == ctx {
+				t.Errorf("redial retained canceled initial context: %v", got.Err())
+			}
+			redialed <- got
+		}
+		return s.dial(got, network, addr)
+	}
+	c, err := newTLSPacketConn(ctx, peer.ln.Addr().String(), callback, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close(); s.closeAll(); requireNoTLSLoops(t) })
+	acceptTLS(t, peer)
+	cancel()
+	roundTrip(t, c, []byte("after initial cancellation"))
+	peer.drop()
+	roundTrip(t, c, []byte("after independent redial"))
+	select {
+	case attempt := <-redialed:
+		waitTLS(t, attempt.Done(), "redial context cleanup")
+	default:
+		t.Fatal("no redial callback")
+	}
+	c.Close()
+	s.closeAll()
+	requireEmptySockets(t, s)
+	requireNoTLSLoops(t)
+}
+
 // goroutinesOf gives the stacks of the client's goroutines that mention s, outside tests.
 func goroutinesOf(s string) string {
 	var found []string

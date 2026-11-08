@@ -39,6 +39,15 @@ type TLSPacketConn struct {
 // the resolver, reconnecting as necessary. A failed reconnection is retried with
 // a backoff until the TLSPacketConn is closed (dnstt-cli, P2).
 func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+	return newTLSPacketConn(ctx, addr, dialTLSContext, logf)
+}
+
+// newTLSPacketConn uses ctx only for the initial dial (dnstt-cli). The exported
+// constructor keeps its legacy initial timeout; session setup supplies its caller's ctx.
+// Successful connections and later redials have an independent lifetime.
+func newTLSPacketConn(ctx context.Context, addr string, dialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error), logf func(format string, args ...any)) (*TLSPacketConn, error) {
 	dial := func() (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
@@ -47,8 +56,8 @@ func NewTLSPacketConn(addr string, dialTLSContext func(ctx context.Context, netw
 	// We maintain one TLS connection at a time, redialing it whenever it
 	// becomes disconnected. We do the first dial here, outside the
 	// goroutine, so that any immediate and permanent connection errors are
-	// reported directly to the caller of NewTLSPacketConn.
-	conn, err := dial()
+	// reported directly to the caller. Only redials use the timeout above.
+	conn, err := dialTLSContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}

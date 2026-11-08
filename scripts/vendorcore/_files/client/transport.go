@@ -124,9 +124,9 @@ func (s *sockets) lookup(ctx context.Context, host string) ([]netip.Addr, error)
 	return ips, nil
 }
 
-// canLookup reports whether lookup can give the addresses of host. DoH and DoT dial when
-// they first send, after Dial has started the handshake; openTransport asks this first, so
-// that a host name without LookupIP fails Dial at once.
+// canLookup reports whether lookup can give the addresses of host. DoT dials during
+// openTransport; DoH waits until its first send. Both reject a missing LookupIP before
+// starting the Noise handshake, so that a host name fails Dial at once.
 func (s *sockets) canLookup(host string) error {
 	if _, err := netip.ParseAddr(host); err == nil || s.cfg.LookupIP != nil {
 		return nil
@@ -242,8 +242,18 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 			return nil, nil, err
 		}
 		dialTLS := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// sockets.dial's bridge ends at TCP return. Keep session cancellation
+			// active through TLS too, then detach it from a successful connection.
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			stop := context.AfterFunc(s.ctx, cancel)
+			defer stop()
 			if id != nil {
-				return utlsDialContext(ctx, network, addr, nil, id, s.dial)
+				conn, err := utlsDialContext(ctx, network, addr, nil, id, s.dial)
+				if err != nil {
+					return nil, err
+				}
+				return conn, nil
 			}
 			raw, err := s.dial(ctx, network, addr)
 			if err != nil {
@@ -257,9 +267,9 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 			}
 			return conn, nil
 		}
-		// NewTLSPacketConn dials with its own context: the session's end still cancels
-		// the dial through sockets.dial.
-		pconn, err := NewTLSPacketConn(r.Address, dialTLS, cfg.Logf)
+		// Only the initial setup uses ctx; later redials use their own timeout and
+		// are canceled by the session's sockets, not by this completed Dial.
+		pconn, err := newTLSPacketConn(ctx, r.Address, dialTLS, cfg.Logf)
 		if err != nil {
 			return nil, nil, err
 		}
