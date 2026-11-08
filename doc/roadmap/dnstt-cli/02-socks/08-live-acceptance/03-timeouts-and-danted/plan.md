@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 703fcad
 depends: [02-live-run-script]
 ---
 
@@ -41,6 +42,92 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
 (`internal/cli/resolvers.go`). The exit's exchange is `exit.SOCKS5.exchange` in
 `internal/exit/socks5.go`; the exit keys of a profile are `type`, `user`, `password_ref`
 (`internal/config/profiles.go`).
+
+## Children
+
+1. [Measurement method and evidence checklist](01-measurement-method/plan.md) — define the
+   quantities, private evidence form, safe run sequence and user decision gates. Task;
+   documentation only.
+2. [Local timeout probes](02-timeout-probes/plan.md) — extend the existing ignored tool
+   with fresh-session handshake timing and healthy-idle receive-gap observations. Stage;
+   separate local instrumentation results, with no live acceptance or product defaults.
+3. [Local one-write SOCKS5 probe](03-danted-probe/plan.md) — add a bounded experimental
+   sequential/one-write comparison over raw tunnel streams, with synthetic fixtures. Task;
+   local tooling only.
+4. [Live one-write test against danted](04-danted-measurements/plan.md) — the user establishes
+   an authenticated SOCKS5 baseline and measures the sequential/one-write exchange through
+   the tunnel to their actual `danted`. Task; user-run evidence and documentation.
+5. [Live timeout measurements and value selection](05-timeout-measurements/plan.md) — the
+   user measures DoH, DoT and UDP; derive candidate values and obtain the user's timeout
+   and recovery decision before product changes. Task; user-run evidence and documentation.
+6. [Apply the measured timeout policy](06-apply-timeouts/plan.md) — wire the selected
+   keepalive into application sessions, share the handshake deadline with resolver checks,
+   and test the degraded-state relationship. Task; product code and tests.
+7. [Resolve the measured danted result](07-danted-result/plan.md) — agree and implement the
+   enduring exit setting if supported, or record the measured rejection in the code comment
+   and R3. Stage; split after the live result determines the branch.
+
+The method is accepted before either tool extension. Both extensions preserve the accepted
+SOCKS5/HTTP comparison instead of recreating it. The timeout measurements depend only on
+their probe, and applying their selected values does not depend on the `danted` result.
+The `danted` probe and user-run test do not require a product setting to exist first.
+The `danted` test is the first user-run child so the unconfirmed service prerequisite is
+checked before product work. No child may close a live gate using a local fixture or
+HTTP success.
+
+## Execution boundaries and user gates
+
+- A SOCKS5 service with a login on the user's server is a prerequisite to confirm, not an
+  established fact. Preparation can finish without it. If it is unavailable, keep the
+  affected live child open and ask the user about the prerequisite or scope; neither an
+  HTTP service nor a failed setup proves that `danted` rejects one-write exchanges.
+- The user performs all real runs from the local instructions. Agent implementation and
+  checks use synthetic temporary profiles/stores, generated identities and loopback only.
+  They must not read, stat or modify actual profile/config/secret data or metadata, dump
+  inherited environment, or call live services or resolvers. Changes to the user's service
+  or network require their own authorization.
+- Timeout selection includes its derivation rule and the visible stability/recovery
+  tradeoff, with smux's timeout-check scheduling included. Obtain the user's decision before
+  applying the values. R2's approximate 30 s is not measurement evidence or an approved
+  replacement for the current 2 min.
+- The new exit key and its default require the user's approval after a positive `danted`
+  result. That contract also covers authentication-method handling and any early sending of
+  credentials: the current sequential path can avoid sending a password when the server
+  selects no authentication. Do not decide those product behaviors in a local experiment.
+- Raw observations, resolver mappings, captures and the course of the runs stay in ignored
+  `doc/local/` or `doc/runs/`. Published nodes carry sanitized decisions and results only;
+  no work dates, environment paths, profile names, server identity or credentials.
+- [Live runs](../04-live-runs/plan.md) still owns the browser/platform/restart/network-change
+  matrix. [Recording the results](../05-record-results/plan.md) still owns the final R2,
+  core/supervisor documentation and parent-stage reconciliation. This split does not waive
+  either sibling's criteria; the negative `danted` branch updates R3 here as already required.
+
+## Local validation for code children
+
+Use cached dependencies only (`GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`); add no
+dependency and perform no external fetch, netns check or network mutation. Keep build/test
+artifacts outside tracked paths. For the relevant code children:
+
+- Run focused race regressions and the explicit tool race suite
+  (`go test -race -count=1 ./doc/runs/_live`) when tooling changes. Preserve the existing
+  two-exit loopback selftest and add focused synthetic tests of the new probes. Linux
+  selftest suppresses Secret Service discovery and uses temporary file-backed storage.
+- Run the applicable project race suite with `DNSTT_CLI_TEST_DBUS=1` and
+  `DNSTT_CLI_TEST_NETNS=0`, excluding exactly
+  `^(TestDualStackListener|TestLoopbackIndexBlocks|TestPhysicalIndexPasses|TestFamilyWithoutRouteRefuses)$`.
+  The mandatory Secret Service/keyring tests use isolated D-Bus and must pass without skips.
+- Check the static product build and exact CI vet split on Linux and Windows: full vet
+  outside `core/`, `-testinggoroutine=false` only for `core/`. The two known upstream
+  noise-test warnings from plain full vet are not new regressions.
+- Cross-build the Windows product and, when affected, tool; compile all applicable Windows
+  project tests and the tool tests. Do not execute Windows binaries or claim Windows/DPAPI
+  runtime acceptance. `TestDNSGuardPermitsPrograms` is compilation-only here.
+- Check formatting and whitespace, the tool's explicit Linux/Windows vet, exclusion from
+  `go list ./...`, Git ignore rules and privacy. Never force-add `doc/runs/` or `doc/local/`.
+
+Documentation-only and user-evidence children require link, consistency and privacy checks,
+not a new code build. The pre-existing signal-reader follow-up stays separate unless a
+concrete regression from this work is demonstrated.
 
 ## Done when
 
