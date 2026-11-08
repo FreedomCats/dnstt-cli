@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: blocked
 detailed: true
 ---
 
@@ -214,3 +214,18 @@ not authorization to fetch or invent metadata. Return a newly necessary public-i
 dependency or other enduring/security choice through lead; do not reopen the already
 authorized repair. Live service availability, several-minute evidence and timeout/recovery
 choices remain with the later user-run nodes.
+
+## Missing verified generation input
+
+The initial preflight stopped before implementation. The available cached source has no
+Git commit/tree objects or source-byte manifest verifying the recorded upstream revision.
+Cached version metadata corroborates the version/hash mapping but cannot establish the
+source bytes. The read-only baseline vendor check fails on unknown revision metadata and
+two additional source entries; the remaining generated files match existing transformations.
+That consistency is useful evidence, not verified clean-source provenance.
+
+This task is blocked pending a verified local checkout or Git bundle/object source for
+the recorded commit, or the user's explicit authorization for a bounded public-upstream
+fetch into a fresh temporary directory. No fetch, generation, source edit or code review
+has occurred. Do not invent metadata, change the recorded revision or weaken acceptance.
+The repair is already authorized; only its required verification input is unresolved.
