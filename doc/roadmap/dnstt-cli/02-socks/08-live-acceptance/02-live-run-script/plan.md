@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: 348ed5b
 depends: [01-network-resolver]
 ---
@@ -45,8 +45,8 @@ the working-tree application against the same server and resolver.
 
 The first child's local implementation and review can be accepted on their own; the
 former task's user-run DoH/UDP criterion is transferred to `04-live-runs`, not waived.
-No implementation or live acceptance is marked done by this replan. The existing Outcome
-below is retained from the former task as implementation evidence; it is not HTTP evidence.
+The completed children and integration review establish local tooling acceptance only;
+the live-runs stage retains the authenticated server and platform gates.
 
 The HTTP profile-integration child uses the selected lazy readiness decision: HTTP
 authentication starts on the first real application `CONNECT`, `Connected` before that
@@ -55,46 +55,51 @@ Basic are already approved; no startup target or new profile field is introduced
 
 ## Outcome
 
-The initial local implementation and code review are complete. The profile-loading
-failure reported before password input was traced to a missing configuration file by a
-metadata-only check. The stage remains in progress until its children and its integration
-acceptance are complete. User-dependent live acceptance belongs to `04-live-runs`.
+All children and the integrated local acceptance are complete. The SOCKS5 baseline is
+recorded by `c31d81c`; the HTTP product work by `4fd6506`, `9d64312`, `c140146` and its
+stage acceptance `056ba4a`; the independent HTTP comparison by `cd76955`. Review covered
+`348ed5b..cd76955`, all 31 changed tracked files and the complete saved ignored tool.
+It found no new integration defect or inconsistency and required no further code change.
 
-- The ignored Go tool implements `compare`, `secret`, `selftest` and command help. Its
-  local README documents the commands, verdicts, privacy rules and remaining live checks.
-- `compare` runs upstream first, then the working-tree application stack, with one
-  resolver and an independent SOCKS5 HTTP probe. `network` uses the first system DNS
-  server on both sides. All requested attempts must pass for a side to pass.
-- Password storage uses the platform secret store with read-back verification and prints
-  only the reference; it leaves the profile file unchanged. Key material is passed to
-  upstream through a transient private file. Logs and output stay outside git.
-- The setup instructions now explain that `-profile` selects an existing profile rather
-  than creating one. The local README gives platform configuration locations, a valid
-  placeholder skeleton and the fields needed before password storage and before a live
-  comparison. The diagnostic check did not read or change real configuration contents.
-- The common profile loader now distinguishes missing files, access failures, wrong file
-  types and invalid configuration through fixed messages without raw paths, profile
-  names or TOML values. Isolated tests cover those cases and verify that a profile with
-  no password reference can reach password input before the secret store is opened.
-  Follow-up review passed without findings, and focused and project-wide checks remain
-  green under the established vet invocation.
-- Review fixed URL-bearing HTTP error diagnostics, with tests for timeout, refusal and
-  redirect errors. Comparison output explicitly warns about different default uTLS
-  distributions for DoH/DoT; an explicit upstream-compatible distribution can be selected
-  for both clients. Each client's default behavior and the specified verdicts are kept.
-- Local selftest passes: both clients fetch the expected body with the server running;
-  after it stops, both fail with `not dnstt-cli`. Generated server identity values are
-  absent from captured output and logs. This is local evidence only.
-- The tool's Linux and Windows vet checks, race tests, Windows cross-build, project build,
-  project race tests and the established vet check with `-testinggoroutine=false` pass.
-  Plain project vet retains the two pre-existing upstream goroutine warnings in
-  `core/noise/noise_test.go`. The tool is excluded from `go list ./...` and ignored by git.
-- The available upstream source can be built, but its Git revision cannot be verified;
-  the tool reports the specified warning. Windows runtime behavior and DPAPI were not
-  exercised.
+- The ignored Go tool provides `compare`, `secret`, `selftest` and help. Comparisons run
+  upstream and then the application serially with the selected resolver, retaining
+  all-attempts-required verdicts and exit codes. Safe profile diagnostics, secret-store
+  read-back, unchanged profile files and private log filtering remain covered.
+- The product supports HTTP/1.1 CONNECT with Basic using the existing exit user and
+  password reference. Authentication starts with the first real application CONNECT;
+  earlier `Connected` means tunnel readiness only. A final 407 stops the supervisor
+  without resolver retry. SOCKS5 behavior and the deferred SSH choice are preserved.
+- The upstream HTTP control path uses an independent standard-library CONNECT helper;
+  the upstream binary remains a raw TCP forwarder. The application probe uses its local
+  unauthenticated SOCKS5 listener and exercises the real product HTTP exit. Both paths
+  fetch complete known HTTP and HTTPS bodies through generated local fixtures.
+- Reviews corrected concurrent stream reads and authentication-failure shutdown in the
+  product, and timeout, response-version, CONNECT framing and response-text validation
+  in the independent helper. Child Outcomes retain the details and regression evidence.
+  No finding remains unresolved, and no new review finding was rejected at integration.
+- Tool and applicable project race suites passed, including mandatory isolated D-Bus
+  tests. Static product build, tool Linux/Windows vet, exact Linux/Windows CI vet split,
+  Windows product/tool builds and compilation of the tool and all 19 applicable project
+  test packages passed. Formatting, range whitespace, package-list exclusion and Git
+  ignore checks passed; all saved tool files remained unchanged during acceptance.
+- Loopback selftest and supplemental isolated execution verified both exits with HTTP
+  and HTTPS during server-up and server-down phases, with generated identity and
+  credential filtering. The normal selftest's down loop remains HTTPS-only; a temporary
+  overlay supplied the additional HTTP-down evidence without changing saved source.
+  Tests used synthetic profiles, temporary isolated stores and generated keys and
+  certificates. No real profile, secret store or its metadata was accessed.
+- Four external TCP/DNS tests were excluded from the applicable project race suite:
+  `TestDualStackListener`, `TestLoopbackIndexBlocks`, `TestPhysicalIndexPasses` and
+  `TestFamilyWithoutRouteRefuses`. Netns and network-mutating checks were not run.
+  The Windows-only external-DNS test was compiled without execution. Plain full vet
+  retains two known upstream noise-test warnings; the prescribed split passes.
+- The tool documents the local 255-byte `secret` input limit, different default uTLS
+  distributions and the unverifiable upstream revision. No new profile field, dependency
+  or hidden startup target was introduced. The upstream-only domain/resolver argument
+  exception and transient private public-key file remain explicit; logs stay outside Git.
 
-Still required in `04-live-runs`: the user stores the real exit password, sets its profile
-reference and runs `compare` against an authenticated exit through a working DoH resolver
-and a working UDP resolver. The upstream client must reach the target through both; the
-corresponding `dnstt-cli` verdicts and private run records belong in `doc/local/`. No live
-acceptance is claimed by completion of this tooling stage.
+Authenticated DoH/UDP comparisons, the SOCKS5 live matrix, measured timeouts, the `danted`
+question and actual Windows runtime/DPAPI remain later gates. Local acceptance does not
+establish them. The pre-existing signal-reader goroutine in `internal/cli/connect.go`
+may remain blocked after normal return; review confirmed it unchanged and not worsened,
+so it remains a separate follow-up. No real problem was left partly fixed because of cost.
