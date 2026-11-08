@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 643e9e4
 depends: [01-measurement-method]
 ---
 
@@ -12,17 +13,26 @@ These are independently testable local instrumentation results, not live measure
 changes to product timeout policy. Their user-run output feeds
 [Live timeout measurements](../05-timeout-measurements/plan.md).
 
-Split this stage into the fresh-session timing/lifecycle result and the idle-observation
-result when its turn comes. The second can then build on the first's bounded raw sessions,
-safe command setup and focused tests without one task owning two separately acceptable
-measurement implementations.
-
 Keep the change under `doc/runs/_live/`: the command entry in `main.go`, focused new timing
 and session-helper files/tests, and `README.md`. Reuse existing safe profile/resolver
 selection and logging. Construct raw `client.Config`/`client.Dial` sessions with the same
 R5 pin/bootstrap rules; do not funnel measurements through the supervisor's preliminary
 20 s or treat `StateConnected` as Noise timing. No new public core API is assumed:
 `Session.Stats().BytesReceived` already exposes receive progress.
+
+## Children
+
+1. [Fresh Noise dial command](01-fresh-dial/plan.md) — an executable fresh-session series,
+   including raw configuration, explicit observation limits, complete sample records,
+   closure and synthetic regressions. Task; independently usable without exit credentials.
+2. [Healthy-idle observation command](02-idle-observation/plan.md) — one-session receive
+   tracing and conservative gap estimation, with independent sequential SOCKS5/target
+   checks outside the window and synthetic regressions. Task; depends on the first child.
+
+Each child includes its command integration, focused tests and README instructions as
+one usable instrumentation result. The second reuses the first's raw-session setup and
+lifecycle; neither child redefines the accepted method or fills the private evidence
+form with results. The later one-write probe can reuse the same raw-session helper.
 
 ## Done when
 
