@@ -1,6 +1,6 @@
 ---
 kind: task
-status: blocked
+status: in-progress
 detailed: true
 ---
 
@@ -215,17 +215,28 @@ dependency or other enduring/security choice through lead; do not reopen the alr
 authorized repair. Live service availability, several-minute evidence and timeout/recovery
 choices remain with the later user-run nodes.
 
-## Missing verified generation input
+## Verified generation input
 
-The initial preflight stopped before implementation. The available cached source has no
+The initial preflight stopped before implementation. The former cached source had no
 Git commit/tree objects or source-byte manifest verifying the recorded upstream revision.
-Cached version metadata corroborates the version/hash mapping but cannot establish the
-source bytes. The read-only baseline vendor check fails on unknown revision metadata and
-two additional source entries; the remaining generated files match existing transformations.
-That consistency is useful evidence, not verified clean-source provenance.
+Cached version metadata corroborated the version/hash mapping but could not establish the
+source bytes. Its read-only baseline vendor check failed on unknown revision metadata and
+two additional non-source entries; the remaining generated files match existing
+transformations. That limitation has been resolved with the user's authorized source download.
 
-This task is blocked pending a verified local checkout or Git bundle/object source for
-the recorded commit, or the user's explicit authorization for a bounded public-upstream
-fetch into a fresh temporary directory. No fetch, generation, source edit or code review
-has occurred. Do not invent metadata, change the recorded revision or weaken acceptance.
-The repair is already authorized; only its required verification input is unresolved.
+Lead obtained `https://github.com/FreedomCats/dnstt` at exactly the recorded commit
+`0c5c52a57d899c05428c116898941761a2ed83c2`. Git object integrity, tree availability and
+a clean detached checkout were verified. At the user's request, it replaced the local
+generation input while preserving the former non-Git directory as a separate backup.
+No extra artifact from that backup was inspected or adopted into the generated source.
+
+The unmodified baseline `vendorcore -check` passes against the verified checkout and
+existing rules. The source-input blocker is closed; implementation may proceed under
+the original generation/provenance gates, including mandatory rules/templates/socket
+guard and a second no-op generation after the fix. No metadata substitution, fabricated
+Git object, overlay workaround or upstream revision change was needed.
+
+The completed download was separately authorized and does not authorize further network
+fetches. The core repair, functional scope and validation matrix remain unchanged; no
+upstream version, API, format or dependency change is included. Fresh-dial stays blocked
+until this prerequisite is independently accepted under its existing criteria.
