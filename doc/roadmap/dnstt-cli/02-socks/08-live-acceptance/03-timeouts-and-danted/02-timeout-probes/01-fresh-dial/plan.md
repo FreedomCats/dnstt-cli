@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: blocked
 detailed: true
 ---
 
@@ -154,3 +154,23 @@ deadline cancellation with session closure, and reporting only rounded or succes
 samples. Actual transport evidence and timeout/recovery decisions remain in
 [Live timeout measurements](../../05-timeout-measurements/plan.md); the known signal-reader
 follow-up stays separate unless this work demonstrates a new regression.
+
+## Pending user decision
+
+The local command is implemented and its scoped review corrections pass, but full
+acceptance is withheld. Initial DoT setup does not honor the caller's context:
+`core/client/tls.go` creates an independent background timeout before returning the
+transport, and `core/client/utls.go` performs a context-free TLS handshake. A silent
+TLS peer can outlive the requested observation limit or interruption before a session
+is returned for cleanup. Synthetic loopback reproductions confirm both paths.
+
+This is a pre-existing core dependency defect, not an accepted exception to the command's
+deadline/lifecycle criteria. The current task expressly forbids core changes. The user
+must choose whether to authorize a separate prerequisite for context-aware initial DoT
+and uTLS setup, including maintained vendor rules/templates and regressions, or explicitly
+weaken the measurement contract. The recommended prerequisite preserves the current
+criteria and successful-session lifetime; a detached goroutine around `client.Dial`
+would lose ownership and is not a safe tool-only workaround.
+
+No prerequisite is authorized yet. Preserve the ignored implementation and its completed
+review work, keep this task blocked and do not claim full acceptance or live evidence.
