@@ -159,7 +159,7 @@ func validateProfile(name string, p *Profile) error {
 	}
 	if strings.TrimSpace(p.Pubkey) == "" {
 		errs = append(errs, fmt.Errorf("%s: pubkey is required", prefix))
-	} else if !isValidPubkey(p.Pubkey) {
+	} else if !IsValidPubkey(p.Pubkey) {
 		errs = append(errs, fmt.Errorf("%s: pubkey must be exactly 64 hex digits", prefix))
 	}
 
@@ -205,8 +205,9 @@ func validateProfile(name string, p *Profile) error {
 	return errors.Join(errs...)
 }
 
-// isValidPubkey checks that the pubkey is exactly 64 hex digits.
-func isValidPubkey(s string) bool {
+// IsValidPubkey reports whether s is a server public key: exactly 64 hex digits. The
+// wizard uses it too, so the rule lives in one place.
+func IsValidPubkey(s string) bool {
 	s = strings.TrimSpace(s)
 	if len(s) != 64 {
 		return false

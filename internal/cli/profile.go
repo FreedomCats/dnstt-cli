@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/datapath"
 )
 
 func profileCommand() *command {
@@ -16,11 +19,19 @@ func profileCommand() *command {
 		description: `Manage dnstt-cli profiles: add, set, show, rm, list.
 
 Subcommands:
-  add <name>      add a new profile (interactive)
+  add [name]      add a new profile with the interactive wizard
   set <name>      edit an existing profile (interactive)
   show <name>     show a profile
   rm <name>       remove a profile
-  list            list all profiles`,
+  list            list all profiles
+
+The wizard asks for the profile name (a positional name skips the question; Enter takes
+"home"), the tunnel domain, the server public key, the exit type (socks5 or http; the SSH
+exit is not implemented yet), the exit login and password, the resolvers — one per line,
+Enter for "network", presets by name — and the mode: tun where the system supports it (it
+needs root to connect), otherwise socks.
+
+The exit password goes to the secret store; profiles.toml holds only a reference to it.`,
 		run: runProfile,
 	}
 }
@@ -191,52 +202,56 @@ func runProfileRm(_ context.Context, e *env, args []string) error {
 	return nil
 }
 
-func runProfileAdd(_ context.Context, e *env, args []string) error {
-	if len(args) == 0 {
-		return usagef("profile add requires a profile name")
+func runProfileAdd(ctx context.Context, e *env, args []string) error {
+	var name string
+	switch len(args) {
+	case 0:
+	case 1:
+		name = args[0]
+		if !validProfileName(name) {
+			return usagef("invalid profile name %q: use ASCII letters, digits and '-', not starting with '-'", name)
+		}
+	default:
+		return usagef("extra argument: profile add takes at most one profile name")
 	}
-	if len(args) > 1 {
-		return usagef("extra argument: profile add takes one profile name")
-	}
-
-	name := args[0]
 
 	profiles, err := config.LoadProfiles()
-	if err != nil {
-		// If the file doesn't exist, create a new profiles structure.
-		profiles = &config.Profiles{
-			Profile: make(map[string]*config.Profile),
-		}
-	}
-
-	if _, exists := profiles.Profile[name]; exists {
-		return fmt.Errorf("profile %q already exists; use 'profile set' to edit it", name)
-	}
-
-	// Create a minimal profile. The kill-switch default is named explicitly, so the
-	// profile keeps it on even if the default changes later.
-	killSwitch := true
-	prof := &config.Profile{
-		Domain:     "",
-		Pubkey:     "",
-		Resolvers:  []string{"network"},
-		Datapath:   "socks",
-		KillSwitch: &killSwitch,
-		Exit: config.Exit{
-			Type: "socks5",
-		},
-	}
-
-	profiles.Profile[name] = prof
-	if profiles.DefaultProfile == "" {
-		profiles.DefaultProfile = name
-	}
-
-	if err := config.SaveProfiles(profiles); err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
+		// Only a missing file means "start a new one". A corrupt or invalid profiles.toml
+		// is an error: the wizard must not overwrite it.
+		profiles = &config.Profiles{Profile: make(map[string]*config.Profile)}
+	} else if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(e.stdout, "Profile %q added. Use 'profile set %s' to configure it.\n", name, name)
+	store, err := config.NewSecretStore()
+	if err != nil {
+		return err
+	}
+
+	// tun is offered when the datapath reports it works on this system; the reason is
+	// shown when the answer is tun anyway.
+	modes := []string{"tun", "socks"}
+	var tunUnsupported error
+	if requires := (&datapath.Tun{}).Requires(); requires.Unsupported != nil {
+		modes = []string{"socks"}
+		tunUnsupported = requires.Unsupported
+	}
+
+	w := &wizard{
+		ask:            newLinePrompter(e.stdin, e.stdout),
+		out:            e.stdout,
+		store:          store,
+		modes:          modes,
+		tunUnsupported: tunUnsupported,
+		save:           config.SaveProfiles,
+	}
+	name, prof, err := w.add(ctx, profiles, name)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(e.stdout, "Profile %q added (exit %s, mode %s).\n", name, prof.Exit.Type, prof.Datapath)
 	return nil
 }
 

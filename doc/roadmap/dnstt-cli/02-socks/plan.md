@@ -42,6 +42,8 @@ Chain: local SOCKS5 listener → `exit.Dialer` (SOCKS5 or HTTP CONNECT over a tu
 6. [Profiles and secrets](06-profiles-secrets/plan.md) — S6. Done.
 7. [Commands](07-commands/plan.md) — S7. Done.
 8. [Live acceptance](08-live-acceptance/plan.md) — S8. A stage of its own.
+9. [Interactive profile wizard](09-profile-wizard/plan.md) — the deferred `profile add`
+   wizard, shared with the later menu; a prerequisite of the Linux live acceptance. Task.
 
 S1–S3 do not depend on each other; the order above is the one they were taken in. A test
 server of the user's own (the old `S0`) is not a node: it is a live prerequisite of
