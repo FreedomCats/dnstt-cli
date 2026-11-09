@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -243,10 +244,370 @@ func TestProfileHelpDescribesWizard(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d", code, exitOK)
 	}
-	for _, want := range []string{"add [name]", "wizard", "socks5", "http", "secret store"} {
+	for _, want := range []string{"add [name]", "wizard", "socks5", "http", "secret store", "its stored exit password"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help does not mention %q:\n%s", want, out)
 		}
+	}
+}
+
+// twoProfileFixture writes profiles.toml with an authenticated default "home" whose exit
+// password is in the store, and a no-auth "work". It returns the profiles path and the
+// reference; the scheme is the platform's, so the reference is what Put returned.
+func twoProfileFixture(t *testing.T) (path, ref string) {
+	t.Helper()
+	path = isolatedConnectConfig(t)
+	var err error
+	ref, err = config.NewSecretStoreFor(path).Put("home.password", wizardTestPassword)
+	if err != nil {
+		t.Fatalf("store.Put: %v", err)
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "home",
+		Profile: map[string]*config.Profile{
+			"home": {
+				Domain:    "t.example.com",
+				Pubkey:    wizardTestPubkey,
+				Resolvers: []string{"network"},
+				Exit:      config.Exit{Type: "socks5", User: "synthetic-user", PasswordRef: ref},
+			},
+			"work": {
+				Domain:    "w.example.com",
+				Pubkey:    wizardTestPubkey,
+				Resolvers: []string{"network"},
+				Exit:      config.Exit{Type: "socks5"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveProfilesTo: %v", err)
+	}
+	return path, ref
+}
+
+// assertRemovalLeftProfilesUnchanged checks that a failed removal left profiles.toml
+// byte-identical, no temporary file behind and no password in the message.
+func assertRemovalLeftProfilesUnchanged(t *testing.T, path string, before []byte, stderr string) {
+	t.Helper()
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("profiles.toml: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a failed removal changed profiles.toml")
+	}
+	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml.tmp was left behind: %v", err)
+	}
+	if strings.Contains(stderr, wizardTestPassword) {
+		t.Fatal("stderr contains the stored password")
+	}
+}
+
+func TestProfileRmDeletesSecret(t *testing.T) {
+	path, ref := twoProfileFixture(t)
+
+	code, stdout, stderr := runCLIInput(t, "", "profile", "rm", "home")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, `Profile "home" removed.`) {
+		t.Fatalf("stdout does not report the removal:\n%s", stdout)
+	}
+
+	profiles, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := profiles.Profile["home"]; ok {
+		t.Fatal("profile home is still in profiles.toml")
+	}
+	if profiles.DefaultProfile != "work" {
+		t.Fatalf("default_profile = %q, want work", profiles.DefaultProfile)
+	}
+	if _, err := config.NewSecretStoreFor(path).Get(ref); err == nil {
+		t.Fatal("the exit password is still in the secret store")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), config.SecretsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "home.password") {
+		t.Fatal("secrets.json still names the removed profile's secret")
+	}
+}
+
+func TestProfileRmWithoutPasswordRefLeavesStoreClosed(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "work",
+		Profile: map[string]*config.Profile{"work": {
+			Domain: "w.example.com", Pubkey: wizardTestPubkey,
+			Resolvers: []string{"network"}, Exit: config.Exit{Type: "socks5"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	old := newSecretStore
+	newSecretStore = func() (config.SecretStore, error) {
+		calls++
+		return newFakeSecretStore(), nil
+	}
+	t.Cleanup(func() { newSecretStore = old })
+
+	code, _, stderr := runCLIInput(t, "", "profile", "rm", "work")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if calls != 0 {
+		t.Fatalf("the secret store constructor was called %d times, want 0", calls)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml still exists after removing the last profile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), config.SecretsFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("secrets.json exists: %v", err)
+	}
+}
+
+func TestProfileRmMissingProfileFailsBeforeStore(t *testing.T) {
+	path, ref := twoProfileFixture(t)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	old := newSecretStore
+	newSecretStore = func() (config.SecretStore, error) {
+		calls++
+		return newFakeSecretStore(), nil
+	}
+	t.Cleanup(func() { newSecretStore = old })
+
+	code, _, stderr := runCLIInput(t, "", "profile", "rm", "missing")
+	if code != exitError {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "not found") {
+		t.Fatalf("stderr does not report the missing profile:\n%s", stderr)
+	}
+	if calls != 0 {
+		t.Fatalf("the secret store constructor was called %d times, want 0", calls)
+	}
+	assertRemovalLeftProfilesUnchanged(t, path, before, stderr)
+
+	got, err := config.NewSecretStoreFor(path).Get(ref)
+	if err != nil || got != wizardTestPassword {
+		t.Fatalf("the secret was disturbed: %q, %v", got, err)
+	}
+}
+
+func TestProfileRmKeepsProfileWhenSecretDeleteFails(t *testing.T) {
+	t.Run("cannot open the store", func(t *testing.T) {
+		path, _ := twoProfileFixture(t)
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		old := newSecretStore
+		newSecretStore = func() (config.SecretStore, error) {
+			return nil, errors.New("synthetic store failure")
+		}
+		t.Cleanup(func() { newSecretStore = old })
+
+		code, _, stderr := runCLIInput(t, "", "profile", "rm", "home")
+		if code != exitError {
+			t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+		}
+		if !strings.Contains(stderr, "was not removed") || !strings.Contains(stderr, "cannot open the secret store") {
+			t.Fatalf("stderr does not report the store failure:\n%s", stderr)
+		}
+		assertRemovalLeftProfilesUnchanged(t, path, before, stderr)
+	})
+
+	t.Run("delete fails", func(t *testing.T) {
+		path, ref := twoProfileFixture(t)
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fake := newFakeSecretStore()
+		fake.deleteErr = errors.New("synthetic delete failure")
+		old := newSecretStore
+		newSecretStore = func() (config.SecretStore, error) { return fake, nil }
+		t.Cleanup(func() { newSecretStore = old })
+
+		code, _, stderr := runCLIInput(t, "", "profile", "rm", "home")
+		if code != exitError {
+			t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+		}
+		if !strings.Contains(stderr, "was not removed") ||
+			!strings.Contains(stderr, "could not be deleted from the secret store") {
+			t.Fatalf("stderr does not report the delete failure:\n%s", stderr)
+		}
+		if fake.deletes != 1 || len(fake.deleted) != 1 || fake.deleted[0] != ref {
+			t.Fatalf("Delete calls = %d %v, want exactly %q", fake.deletes, fake.deleted, ref)
+		}
+		assertRemovalLeftProfilesUnchanged(t, path, before, stderr)
+	})
+}
+
+func TestProfileRmReportsPartialStateWhenSaveFails(t *testing.T) {
+	path, ref := twoProfileFixture(t)
+
+	old := saveProfiles
+	saveProfiles = func(*config.Profiles) error {
+		return errors.New("synthetic save failure")
+	}
+	t.Cleanup(func() { saveProfiles = old })
+
+	code, _, stderr := runCLIInput(t, "", "profile", "rm", "home")
+	if code != exitError {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	for _, want := range []string{
+		"synthetic save failure",
+		"was not removed from profiles.toml, but its exit password was removed from the secret store",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr does not contain %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, wizardTestPassword) {
+		t.Fatal("stderr contains the stored password")
+	}
+
+	profiles, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := profiles.Profile["home"]
+	if home == nil {
+		t.Fatal("the profile was removed although the save failed")
+	}
+	if home.Exit.PasswordRef != ref {
+		t.Fatalf("password_ref = %q, want %q", home.Exit.PasswordRef, ref)
+	}
+	if _, err := config.NewSecretStoreFor(path).Get(ref); err == nil {
+		t.Fatal("the exit password was not deleted")
+	}
+}
+
+func TestProfileRmToleratesMissingSecret(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := config.NewSecretStoreFor(path)
+	ref, err := store.Put("gone.password", wizardTestPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "home",
+		Profile: map[string]*config.Profile{"home": {
+			Domain: "t.example.com", Pubkey: wizardTestPubkey,
+			Resolvers: []string{"network"},
+			Exit:      config.Exit{Type: "socks5", User: "synthetic-user", PasswordRef: ref},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := runCLIInput(t, "", "profile", "rm", "home")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml still exists after removing the last profile: %v", err)
+	}
+}
+
+func TestProfileRmLastProfileRemovesFile(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := config.NewSecretStoreFor(path)
+	ref, err := store.Put("home.password", wizardTestPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "home",
+		Profile: map[string]*config.Profile{"home": {
+			Domain: "t.example.com", Pubkey: wizardTestPubkey,
+			Resolvers: []string{"network"},
+			Exit:      config.Exit{Type: "socks5", User: "synthetic-user", PasswordRef: ref},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLIInput(t, "", "profile", "rm", "home")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, `Profile "home" removed.`) {
+		t.Fatalf("stdout does not report the removal:\n%s", stdout)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml still exists after removing the last profile: %v", err)
+	}
+	if _, err := store.Get(ref); err == nil {
+		t.Fatal("the exit password is still in the secret store")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), config.SecretsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "home.password") {
+		t.Fatal("secrets.json still names the removed profile's secret")
+	}
+
+	code, stdout, stderr = runCLIInput(t, "", "profile", "list")
+	if code != exitOK {
+		t.Fatalf("profile list exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, "No profiles configured.") {
+		t.Fatalf("profile list does not report the empty state:\n%s", stdout)
+	}
+
+	code, _, stderr = runCLIInput(t, "", "connect")
+	if code != exitError {
+		t.Fatalf("connect exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "no default profile set") {
+		t.Fatalf("connect does not report the missing default:\n%s", stderr)
+	}
+
+	input := strings.Join([]string{
+		"", // name: Enter takes home
+		"t.example.com",
+		wizardTestPubkey,
+		"socks5",
+		"", // login: no authentication
+		"", // resolver: network
+		"socks",
+	}, "\n") + "\n"
+	code, stdout, stderr = runCLIInput(t, input, "profile", "add")
+	if code != exitOK {
+		t.Fatalf("profile add exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, `Profile "home" added`) {
+		t.Fatalf("profile add does not report the new profile:\n%s", stdout)
+	}
+
+	profiles, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatalf("the re-created profile does not load: %v", err)
+	}
+	if profiles.Profile["home"] == nil {
+		t.Fatal("profile add did not create home from the empty state")
+	}
+	if profiles.DefaultProfile != "home" {
+		t.Fatalf("default_profile = %q, want home", profiles.DefaultProfile)
 	}
 }
 

@@ -54,6 +54,9 @@ type Socks struct {
 }
 
 // LoadProfiles reads profiles.toml from the default path.
+//
+// A missing file is the empty set: no profiles configured. An existing empty or invalid
+// file is an error.
 func LoadProfiles() (*Profiles, error) {
 	path, err := Path()
 	if err != nil {
@@ -62,9 +65,13 @@ func LoadProfiles() (*Profiles, error) {
 	return LoadProfilesFrom(path)
 }
 
-// LoadProfilesFrom reads profiles.toml from the given path.
+// LoadProfilesFrom reads profiles.toml from the given path. A missing file is the empty
+// set; an existing empty or invalid file is an error.
 func LoadProfilesFrom(path string) (*Profiles, error) {
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return &Profiles{Profile: map[string]*Profile{}}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("profiles %s: %w", path, err)
 	}
@@ -91,7 +98,8 @@ func LoadProfilesFrom(path string) (*Profiles, error) {
 	return &p, nil
 }
 
-// SaveProfiles writes profiles.toml to the default path.
+// SaveProfiles writes profiles.toml to the default path. The file is never written empty,
+// because an existing empty file is invalid: the empty set is the absence of the file.
 func SaveProfiles(p *Profiles) error {
 	path, err := Path()
 	if err != nil {
@@ -100,8 +108,14 @@ func SaveProfiles(p *Profiles) error {
 	return SaveProfilesTo(path, p)
 }
 
-// SaveProfilesTo writes profiles.toml to the given path.
+// SaveProfilesTo writes profiles.toml to the given path. An empty set removes the file
+// instead of writing it: an existing empty file is invalid, and a missing file is the
+// empty set on load.
 func SaveProfilesTo(path string, p *Profiles) error {
+	if p == nil || len(p.Profile) == 0 {
+		return removeProfilesFile(path)
+	}
+
 	if err := validateProfiles(p); err != nil {
 		return fmt.Errorf("profiles: %w", err)
 	}
@@ -127,6 +141,15 @@ func SaveProfilesTo(path string, p *Profiles) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
+		return fmt.Errorf("profiles %s: %w", path, err)
+	}
+	return nil
+}
+
+// removeProfilesFile removes profiles.toml when the set is empty. A file that is already
+// gone is not an error.
+func removeProfilesFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("profiles %s: %w", path, err)
 	}
 	return nil

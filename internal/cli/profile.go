@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
@@ -22,7 +21,7 @@ Subcommands:
   add [name]      add a new profile with the interactive wizard
   set <name>      edit an existing profile (interactive)
   show <name>     show a profile
-  rm <name>       remove a profile
+  rm <name>       remove a profile and its stored exit password
   list            list all profiles
 
 The wizard asks for the profile name (a positional name skips the question; Enter takes
@@ -164,6 +163,13 @@ func maskSensitive(s string) string {
 	return s[:4] + "..." + s[len(s)-4:]
 }
 
+// Indirections for the tests: a failing store and a failing save are not reachable
+// from an isolated temporary config otherwise.
+var (
+	newSecretStore = config.NewSecretStore
+	saveProfiles   = config.SaveProfiles
+)
+
 func runProfileRm(_ context.Context, e *env, args []string) error {
 	if len(args) == 0 {
 		return usagef("profile rm requires a profile name")
@@ -179,8 +185,23 @@ func runProfileRm(_ context.Context, e *env, args []string) error {
 		return err
 	}
 
-	if _, ok := profiles.Profile[name]; !ok {
+	prof, ok := profiles.Profile[name]
+	if !ok {
 		return fmt.Errorf("profile %q not found", name)
+	}
+
+	// The secret goes first: a secret whose profile is gone stays in the store with
+	// nothing pointing at it, and no command can find it again. A profile left without
+	// its secret is visible in profiles.toml, and the command can say so.
+	ref := prof.Exit.PasswordRef
+	if ref != "" {
+		store, err := newSecretStore()
+		if err != nil {
+			return fmt.Errorf("profile %q was not removed: cannot open the secret store: %w", name, err)
+		}
+		if err := store.Delete(ref); err != nil {
+			return fmt.Errorf("profile %q was not removed: the exit password could not be deleted from the secret store: %w", name, err)
+		}
 	}
 
 	delete(profiles.Profile, name)
@@ -194,8 +215,12 @@ func runProfileRm(_ context.Context, e *env, args []string) error {
 		}
 	}
 
-	if err := config.SaveProfiles(profiles); err != nil {
-		return err
+	if err := saveProfiles(profiles); err != nil {
+		if ref == "" {
+			return err
+		}
+		return errors.Join(err, fmt.Errorf(
+			"profile %q was not removed from profiles.toml, but its exit password was removed from the secret store", name))
 	}
 
 	fmt.Fprintf(e.stdout, "Profile %q removed.\n", name)
@@ -216,11 +241,7 @@ func runProfileAdd(ctx context.Context, e *env, args []string) error {
 	}
 
 	profiles, err := config.LoadProfiles()
-	if errors.Is(err, fs.ErrNotExist) {
-		// Only a missing file means "start a new one". A corrupt or invalid profiles.toml
-		// is an error: the wizard must not overwrite it.
-		profiles = &config.Profiles{Profile: make(map[string]*config.Profile)}
-	} else if err != nil {
+	if err != nil {
 		return err
 	}
 

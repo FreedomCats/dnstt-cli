@@ -66,12 +66,13 @@ func askedBy(secret bool) string {
 
 // fakeSecretStore is a SecretStore in memory, with the calls it saw.
 type fakeSecretStore struct {
-	values  map[string]string
-	refs    map[string]string
-	puts    int
-	deletes int
-	deleted []string
-	putErr  error
+	values    map[string]string
+	refs      map[string]string
+	puts      int
+	deletes   int
+	deleted   []string
+	putErr    error
+	deleteErr error
 }
 
 func newFakeSecretStore() *fakeSecretStore {
@@ -103,6 +104,9 @@ func (s *fakeSecretStore) Get(ref string) (string, error) {
 func (s *fakeSecretStore) Delete(ref string) error {
 	s.deletes++
 	s.deleted = append(s.deleted, ref)
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	name, ok := s.refs[ref]
 	if !ok {
 		return nil

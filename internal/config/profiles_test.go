@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -664,5 +665,73 @@ func TestProfilesWithSecrets(t *testing.T) {
 	}
 	if password != "my-exit-password" {
 		t.Errorf("password: got %q, want %q", password, "my-exit-password")
+	}
+}
+
+// A missing profiles.toml is the empty set: no profiles configured and no error.
+func TestLoadProfilesFromMissingFileIsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+
+	loaded, err := LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatalf("LoadProfilesFrom: %v", err)
+	}
+	if loaded.Profile == nil {
+		t.Fatal("Profile map is nil, want an empty non-nil map")
+	}
+	if len(loaded.Profile) != 0 {
+		t.Fatalf("len(Profile) = %d, want 0", len(loaded.Profile))
+	}
+}
+
+// An existing empty profiles.toml is invalid, unlike a missing one.
+func TestLoadProfilesFromEmptyFileIsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadProfilesFrom(path); err == nil {
+		t.Fatal("an empty profiles.toml loaded without an error")
+	}
+}
+
+// Saving the empty set removes the file rather than writing an empty one; a file that is
+// already gone is not an error.
+func TestSaveProfilesEmptySetRemovesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	profiles := &Profiles{DefaultProfile: "home", Profile: map[string]*Profile{"home": {
+		Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: Exit{Type: "socks5"},
+	}}}
+	if err := SaveProfilesTo(path, profiles); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("profiles.toml was not written: %v", err)
+	}
+
+	empty := &Profiles{Profile: map[string]*Profile{}}
+	if err := SaveProfilesTo(path, empty); err != nil {
+		t.Fatalf("saving the empty set: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml still exists after the empty save: %v", err)
+	}
+	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("profiles.toml.tmp was left behind: %v", err)
+	}
+	if err := SaveProfilesTo(path, empty); err != nil {
+		t.Fatalf("saving the empty set with no file: %v", err)
+	}
+	if err := SaveProfilesTo(path, nil); err != nil {
+		t.Fatalf("saving nil: %v", err)
+	}
+
+	loaded, err := LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if loaded.Profile == nil || len(loaded.Profile) != 0 {
+		t.Fatalf("reloaded profiles = %+v, want the empty set", loaded)
 	}
 }
