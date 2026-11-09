@@ -105,6 +105,10 @@ func NewSocks(opts SocksOptions) (*Socks, error) {
 	return s, nil
 }
 
+// Requires: nothing, as the zero value of Requirements says. Socks runs as an ordinary
+// user and sends nothing of the system into the tunnel by itself.
+func (s *Socks) Requires() Requirements { return Requirements{} }
+
 // ListenAddr is the address of the listener: the one asked for, unless the port was 0.
 func (s *Socks) ListenAddr() net.Addr { return s.ln.Addr() }
 

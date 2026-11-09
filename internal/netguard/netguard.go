@@ -62,7 +62,8 @@ const SocketMark uint32 = 0x1076
 // SelectInterfaces chooses the physical interface of the default route for IPv4 and IPv6
 // and sets their indexes. exclude is our own adapter (the datapath's AdapterID: the LUID
 // on Windows, the index on Linux); 0 means there is nothing to exclude. Returns the
-// choice in words for output.
+// applied choice in words for output: the same one the sockets and Choice get, with the
+// IPv6 part dropped when NoIPv6 is set.
 //
 // No network at all is not an error: the indexes are zeroed, and the core's sockets fail
 // with a clear message instead of going into the tunnel. The only error is the system
@@ -75,6 +76,8 @@ func (g *Guard) SelectInterfaces(exclude uint64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Report what is actually applied: commit filters again, which is harmless.
+	c = g.allowed(c)
 	g.commit(c)
 	return c.String(), nil
 }

@@ -33,17 +33,16 @@ type TunnelOptions struct {
 	Logf func(format string, args ...any)
 	// OnTransition receives every state change of the supervisor; nil — silent.
 	OnTransition func(supervisor.Transition)
+	// Control is the socket hook of the core: netguard.Guard.Control for a datapath that
+	// takes all system traffic. nil — the core's sockets are left as they are (socks).
+	Control func(network, address string, c syscall.RawConn) error
 }
 
-// Tunnel is a dnstt tunnel built from a profile: the supervisor, the exit dialer and the
-// datapath ready to be run.
+// Tunnel is a dnstt tunnel built from a profile: the supervisor and the exit dialer,
+// ready to be run. The datapath is built separately by BuildDatapath.
 type Tunnel struct {
 	Supervisor *supervisor.Tunnel
-	Datapath   interface {
-		Run(context.Context) error
-		Close() error
-	}
-	Exit exit.Dialer
+	Exit       exit.Dialer
 }
 
 // BuildTunnel creates the supervisor and the exit dialer from the profile, ready to be run.
@@ -93,14 +92,11 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 
 	// Build the session config for the supervisor.
 	sessionCfg := client.Config{
-		Domain: domain,
-		PubKey: pubkey,
-		UTLS:   prof.UTLS,
-		Control: func(network, address string, c syscall.RawConn) error {
-			// TODO: bind to the physical interface when netguard is integrated.
-			return nil
-		},
-		Logf: opts.Logf,
+		Domain:  domain,
+		PubKey:  pubkey,
+		UTLS:    prof.UTLS,
+		Control: opts.Control,
+		Logf:    opts.Logf,
 	}
 
 	// Build the exit dialer.
@@ -202,12 +198,44 @@ func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS
 	return resolvers.NewProfileBootstrap(own, list, networkDNS), nil
 }
 
+// Datapath is what BuildDatapath returns: the datapath of the run, socks or tun. For tun
+// only the object is built here: the adapter is opened by the first Start of the
+// supervisor, when the exit is known to serve.
+type Datapath interface {
+	Close() error
+	Requires() datapath.Requirements
+}
+
+var (
+	_ Datapath = (*datapath.Tun)(nil)
+	_ Datapath = (*datapath.Socks)(nil)
+)
+
+// defaultTunDNS is the DNS behind the exit when the profile has no tun_dns.
+var defaultTunDNS = netip.MustParseAddr("1.1.1.1")
+
+// parseTunDNS reads the profile's tun_dns: the DNS behind the exit, an IPv4 address
+// without a port (the netstack dials port 53). Empty means defaultTunDNS.
+func parseTunDNS(s string) (netip.Addr, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return defaultTunDNS, nil
+	}
+	addr, err := netip.ParseAddr(s)
+	if err != nil || !addr.Is4() {
+		return netip.Addr{}, fmt.Errorf("tun_dns %q is not an IPv4 address", s)
+	}
+	return addr, nil
+}
+
 // BuildDatapath creates the datapath (socks or tun) for the tunnel. It must be called after
 // the supervisor is built, because the datapath needs the supervisor's OpenStream.
-// The datapath is already running when this returns (for socks, the listener is active).
-func BuildDatapath(tun *Tunnel, prof *config.Profile, logf func(format string, args ...any)) (interface {
-	Close() error
-}, error) {
+//
+// For socks the listener is already open when this returns: a program may be pointed at
+// it while the tunnel is still dialing. For tun nothing is opened until a session: the
+// adapter and its routes are the supervisor's Start business, because the system traffic
+// may lead into the tunnel only when the exit serves.
+func BuildDatapath(tun *Tunnel, prof *config.Profile, logf func(format string, args ...any)) (Datapath, error) {
 	datapathType := prof.Datapath
 	if datapathType == "" {
 		datapathType = "socks"
@@ -233,7 +261,19 @@ func BuildDatapath(tun *Tunnel, prof *config.Profile, logf func(format string, a
 		}
 		return socks, nil
 	case "tun":
-		return nil, errors.New("tun datapath is not implemented yet (stage E2)")
+		dns, err := parseTunDNS(prof.TunDNS)
+		if err != nil {
+			return nil, err
+		}
+		t, err := datapath.NewTun(datapath.TunOptions{
+			Dialer: tun.Exit,
+			TunDNS: dns,
+			Logf:   logf,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("tun datapath: %w", err)
+		}
+		return t, nil
 	default:
 		return nil, fmt.Errorf("unknown datapath type %q", datapathType)
 	}

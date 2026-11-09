@@ -134,6 +134,7 @@ func openTunAdapter(name string, dialer exit.Dialer, tunDNS netip.Addr, logf fun
 	}
 
 	return &tunAdapter{
+		id: uint64(index),
 		configure: func() error {
 			return linuxsys.ConfigurePointToPoint(index, tunHostAddress, tunAddress, TunnelMTU, logf)
 		},

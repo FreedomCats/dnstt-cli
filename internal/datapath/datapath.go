@@ -62,6 +62,15 @@ type Reserver interface {
 	Reserve() (release func(), err error)
 }
 
+// Adapter is an optional part of a datapath: an implementation that has a system interface
+// of its own that the tunnel must not take for the physical one. The caller passes the id
+// to netguard: it is the LUID on Windows and the interface index on Linux, and 0 means
+// there is no adapter yet (the adapter is opened by the first Start) or any more (after
+// Close).
+type Adapter interface {
+	AdapterID() uint64
+}
+
 // Persistent is an optional part of a datapath: an implementation that lives the whole
 // dnstt-cli connect, not one session. For tun it is the adapter: there is no point in
 // recreating it on every reconnection, and Windows would also make "Network 2",

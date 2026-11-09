@@ -168,6 +168,66 @@ func TestConnectHTTPProfile(t *testing.T) {
 	}
 }
 
+// An unknown datapath is a command line error, not a failed run.
+func TestConnectUnknownDatapath(t *testing.T) {
+	code, _, stderr := runCLI(t, "connect", "-datapath", "wireguard")
+	if code != exitUsage {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "datapath") || !strings.Contains(stderr, "wireguard") {
+		t.Fatalf("stderr does not name the bad datapath:\n%s", stderr)
+	}
+}
+
+// The flag wins over the profile: a tun profile with -datapath socks opens the local
+// SOCKS5 listener and does not go near the adapter or its refusal.
+func TestConnectTunProfileWithSocksFlag(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	domain, err := dns.ParseName("t.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.StartTest(domain, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	p := &config.Profile{
+		Domain: domain.String(), Pubkey: strings.Repeat("01", 32),
+		Resolvers: []string{"udp:" + srv.Addr.String()}, Datapath: "tun",
+		Exit:  config.Exit{Type: "socks5"},
+		Socks: config.Socks{Listen: "127.0.0.1:0"},
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{DefaultProfile: "home", Profile: map[string]*config.Profile{"home": p}}); err != nil {
+		t.Fatal(err)
+	}
+
+	output := &connectOutput{lines: make(chan string, 100)}
+	e := &env{stdout: io.Discard, stderr: output, stdin: strings.NewReader("")}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, e, []string{"connect", "-v", "-datapath", "socks"}) }()
+
+	for opened := false; !opened; {
+		select {
+		case line := <-output.lines:
+			opened = strings.Contains(line, "[SOCKS] listening on ")
+		case <-ctx.Done():
+			t.Fatal("connect did not open its local listener")
+		}
+	}
+	cancel()
+	if code := waitConnectResult(t, done); code != exitOK {
+		t.Fatalf("connect exit = %d, want %d; output:\n%s", code, exitOK, output.String())
+	}
+	for _, refusal := range []string{"-datapath socks", "modprobe", "needs root"} {
+		if strings.Contains(output.String(), refusal) {
+			t.Fatalf("the socks override printed the tun refusal %q:\n%s", refusal, output.String())
+		}
+	}
+}
+
 func TestConnectSSHDeferred(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	p := &config.Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: config.Exit{Type: "ssh"}}

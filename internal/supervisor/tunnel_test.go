@@ -884,6 +884,203 @@ func TestNetworkEntry(t *testing.T) {
 	}
 }
 
+// The datapath starts with a session and is suspended after every session: a death, a
+// Restart while connected and the stop all take the system traffic out; a Restart in the
+// middle starts it again without a delay.
+func TestDatapathAcrossSessions(t *testing.T) {
+	h := newHarness(t, []string{r1}, nil)
+	dp := &fakeDatapath{}
+	h.tun.SetDatapath(dp)
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	if got := dp.snapshot(); !slices.Equal(got, []string{"Start"}) {
+		t.Fatalf("calls after the first session: %v", got)
+	}
+
+	// The session dies: Suspend before the next Start.
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	if got := dp.snapshot(); !slices.Equal(got, []string{"Start", "Suspend", "Start"}) {
+		t.Fatalf("calls after a death: %v", got)
+	}
+
+	// A network change while connected: Suspend then Start, and no delay.
+	h.tun.Restart(errors.New("network changed"))
+	h.waitState(StateConnected, 3)
+	if got := dp.snapshot(); !slices.Equal(got, []string{"Start", "Suspend", "Start", "Suspend", "Start"}) {
+		t.Fatalf("calls after a restart: %v", got)
+	}
+	if got := h.sleepList(); !slices.Equal(got, []time.Duration{time.Second}) {
+		t.Fatalf("delays %v, want only the one after the death", got)
+	}
+
+	// The stop has a session too: Suspend is the last call and Run returns nil.
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	calls := dp.snapshot()
+	if len(calls) == 0 || calls[len(calls)-1] != "Suspend" {
+		t.Fatalf("calls after the stop: %v, want Suspend last", calls)
+	}
+	if want := []string{"Start", "Suspend", "Start", "Suspend", "Start", "Suspend"}; !slices.Equal(calls, want) {
+		t.Fatalf("calls %v, want %v", calls, want)
+	}
+}
+
+// A failed Start closes the session, does not count as Connected, is reported with its
+// cause in Reconnecting and retried after the usual delay with the same resolver first;
+// the resolver is not penalized. With the fault cleared the session connects.
+func TestDatapathStartFailure(t *testing.T) {
+	h := newHarness(t, []string{r1, r2}, nil)
+	dp := &fakeDatapath{}
+	startErr := errors.New("adapter refused")
+	dp.setStartErr(startErr)
+	h.tun.SetDatapath(dp)
+
+	// The delay is held open: the Connected of the second session must not appear until
+	// the fault is cleared.
+	release := make(chan struct{})
+	h.sleep = func(ctx context.Context, _ time.Duration) bool {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return false
+		}
+		dp.setStartErr(nil)
+		return true
+	}
+
+	h.run(context.Background())
+	tr := h.waitState(StateReconnecting, 1)
+	if tr.Cause == nil || !errors.Is(tr.Cause, startErr) {
+		t.Errorf("Reconnecting cause = %v, want %v", tr.Cause, startErr)
+	}
+	if tr.Resolver != r1 || tr.Delay != time.Second {
+		t.Errorf("Reconnecting = %+v, want %s after 1s", tr, r1)
+	}
+	if !h.session(0).closed.Load() {
+		t.Error("the session with the failed Start is left open")
+	}
+	if got := h.dialList(); !slices.Equal(got, []string{r1}) {
+		t.Errorf("dials %q, want no new dial before the delay ends", got)
+	}
+	h.mu.Lock()
+	for _, other := range h.trans {
+		if other.To == StateConnected {
+			t.Error("Connected was reported for a session whose Start failed")
+		}
+	}
+	h.mu.Unlock()
+
+	close(release)
+	h.waitState(StateConnected, 1)
+	if got := h.dialList(); !slices.Equal(got, []string{r1, r1}) {
+		t.Errorf("dials %q, want the same resolver first", got)
+	}
+	if got := h.sleepList(); !slices.Equal(got, []time.Duration{time.Second}) {
+		t.Errorf("delays %v, want the first backoff 1s", got)
+	}
+	if _, aside := h.tun.opts.Resolvers.Aside(0); aside {
+		t.Error("a failed datapath start penalized the resolver")
+	}
+	// One failed Start, one Start that went through, one Suspend at the stop.
+	h.wait("the datapath lifecycle", func() bool {
+		return len(dp.snapshot()) == 2
+	})
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Start", "Start", "Suspend"}; !slices.Equal(dp.snapshot(), want) {
+		t.Errorf("calls %v, want %v", dp.snapshot(), want)
+	}
+}
+
+// The datapath is not started without a session: neither a failed dial nor a failed exit
+// check may put the system traffic into an adapter that serves nothing.
+func TestDatapathNeverStartsWithoutASession(t *testing.T) {
+	t.Run("dial fails", func(t *testing.T) {
+		h := newHarness(t, []string{r1}, nil)
+		dp := &fakeDatapath{}
+		h.tun.SetDatapath(dp)
+		h.dial = func(string, int) error { return errDial }
+		h.run(context.Background())
+		var err error
+		select {
+		case err = <-h.result:
+			h.result <- err
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not stop")
+		}
+		var ne *NeverConnectedError
+		if !errors.As(err, &ne) {
+			t.Fatalf("Run = %v, want NeverConnectedError", err)
+		}
+		if got := dp.snapshot(); len(got) != 0 {
+			t.Errorf("datapath calls %v, want none", got)
+		}
+	})
+
+	t.Run("exit check fails", func(t *testing.T) {
+		h := newHarness(t, []string{r1}, func(o *Options) {
+			o.CheckExit = func(context.Context, exit.OpenStream) error {
+				return errors.New("exit not ready")
+			}
+		})
+		dp := &fakeDatapath{}
+		h.tun.SetDatapath(dp)
+		h.sleep = func(ctx context.Context, _ time.Duration) bool {
+			<-ctx.Done()
+			return false
+		}
+		h.run(context.Background())
+		h.waitState(StateReconnecting, 1)
+		if err := h.stop(); err != nil {
+			t.Fatal(err)
+		}
+		if got := dp.snapshot(); len(got) != 0 {
+			t.Errorf("datapath calls %v, want none", got)
+		}
+	})
+}
+
+// A Suspend error is logged and does not replace the outcome of the session: the tunnel
+// reconnects and the next Start runs.
+func TestDatapathSuspendFailure(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		lines []string
+	)
+	h := newHarness(t, []string{r1}, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+		}
+	})
+	dp := &fakeDatapath{}
+	suspendErr := errors.New("suspend failed")
+	dp.setSuspendErr(suspendErr)
+	h.tun.SetDatapath(dp)
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	if got := dp.snapshot(); !slices.Equal(got, []string{"Start", "Suspend", "Start"}) {
+		t.Fatalf("calls %v, want a Suspend between the two Starts", got)
+	}
+	mu.Lock()
+	joined := strings.Join(lines, "\n")
+	mu.Unlock()
+	if !strings.Contains(joined, suspendErr.Error()) {
+		t.Errorf("the Suspend error was not logged: %q", joined)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Without a way to read the network's DNS, or with none given, the entry fails its dial
 // with a reason.
 func TestNetworkEntryNoDNS(t *testing.T) {

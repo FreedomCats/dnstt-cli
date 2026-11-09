@@ -17,6 +17,7 @@ import (
 // can fail any step.
 type fakeAdapter struct {
 	mu    sync.Mutex
+	id    uint64
 	calls []string
 
 	configureErr     error
@@ -34,6 +35,7 @@ type fakeAdapter struct {
 
 func (f *fakeAdapter) adapter() *tunAdapter {
 	return &tunAdapter{
+		id:            f.id,
 		configure:     func() error { return f.step("configure") },
 		addAddress:    func() error { return f.step("addAddress") },
 		removeAddress: func() error { return f.step("removeAddress") },
@@ -406,6 +408,28 @@ func TestTunRequires(t *testing.T) {
 	}
 	if r := w.Requires(); !r.Admin || !r.Netguard || r.DNSGuard {
 		t.Errorf("Requires: %+v, want Admin and Netguard", r)
+	}
+}
+
+// The adapter id is the netguard exclusion: 0 until the first Start opens the adapter,
+// the id while it exists, 0 after Close.
+func TestTunAdapterID(t *testing.T) {
+	w, f, _ := newFakeTun(t)
+	f.id = 7
+	if got := w.AdapterID(); got != 0 {
+		t.Errorf("AdapterID before Start = %d, want 0", got)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.AdapterID(); got != 7 {
+		t.Errorf("AdapterID = %d, want the adapter's id 7", got)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.AdapterID(); got != 0 {
+		t.Errorf("AdapterID after Close = %d, want 0", got)
 	}
 }
 

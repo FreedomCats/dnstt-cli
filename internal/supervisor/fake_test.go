@@ -78,6 +78,47 @@ func (f *fakeSession) Close() error {
 	return nil
 }
 
+// fakeDatapath is the session part of a datapath with no system behind it: it records
+// Start and Suspend in order and can fail either.
+type fakeDatapath struct {
+	mu         sync.Mutex
+	calls      []string
+	startErr   error
+	suspendErr error
+}
+
+func (d *fakeDatapath) Start() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, "Start")
+	return d.startErr
+}
+
+func (d *fakeDatapath) Suspend() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, "Suspend")
+	return d.suspendErr
+}
+
+func (d *fakeDatapath) snapshot() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.calls...)
+}
+
+func (d *fakeDatapath) setStartErr(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.startErr = err
+}
+
+func (d *fakeDatapath) setSuspendErr(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.suspendErr = err
+}
+
 // harness runs a Tunnel with a fake dialer over a list of resolvers.
 type harness struct {
 	t   *testing.T

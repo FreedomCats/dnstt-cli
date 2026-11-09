@@ -14,7 +14,9 @@ import (
 
 	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/datapath"
 	"github.com/FreedomCats/dnstt-cli/internal/exit"
+	"github.com/FreedomCats/dnstt-cli/internal/netguard"
 	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
 
@@ -34,8 +36,12 @@ If no profile name is given, the default profile is used.`,
 func runConnect(ctx context.Context, e *env, args []string) error {
 	fs := newFlagSet(connectCommand())
 	verbose := fs.Bool("v", false, "verbose: show tunnel logs")
+	datapathFlag := fs.String("datapath", "", "datapath: socks or tun (default: the profile's, then socks)")
 	if err := parse(e, fs, args); err != nil {
 		return err
+	}
+	if *datapathFlag != "" && *datapathFlag != "socks" && *datapathFlag != "tun" {
+		return usagef("invalid -datapath %q: the datapath is socks or tun", *datapathFlag)
 	}
 
 	// Determine the profile name.
@@ -67,18 +73,40 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		return fmt.Errorf("profile %q not found", profileName)
 	}
 
-	// Build the tunnel.
+	// The datapath of the run: the flag, then the profile, then socks.
+	kind := prof.Datapath
+	if *datapathFlag != "" {
+		kind = *datapathFlag
+	}
+	if kind == "" {
+		kind = "socks"
+	}
+	p := *prof
+	p.Datapath = kind
+
 	logf := func(format string, args ...any) {
 		if *verbose {
 			fmt.Fprintf(e.stderr, format+"\n", args...)
 		}
 	}
 
+	// The guard exists before the tunnel, because the session config takes its Control at
+	// construction. It does not touch the system yet: the adapter index is the
+	// datapath's, and only the datapath knows it.
+	var guard *netguard.Guard
+	var control func(network, address string, c syscall.RawConn) error
+	if kind == "tun" {
+		guard = &netguard.Guard{Logf: logf}
+		control = guard.Control
+	}
+
+	// Build the tunnel.
 	transitions := make(chan supervisor.Transition, 100)
 	tunnel, err := app.BuildTunnel(app.TunnelOptions{
-		Profile:     prof,
+		Profile:     &p,
 		ProfileName: profileName,
 		Logf:        logf,
+		Control:     control,
 		OnTransition: func(tr supervisor.Transition) {
 			transitions <- tr
 		},
@@ -87,12 +115,62 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 
-	// Build the datapath.
-	dp, err := app.BuildDatapath(tunnel, prof, logf)
+	// Build the datapath. For socks the listener is open already; for tun the adapter
+	// opens on the first session.
+	dp, err := app.BuildDatapath(tunnel, &p, logf)
 	if err != nil {
 		return err
 	}
 	defer dp.Close()
+
+	// Refuse a datapath this system cannot run before the reservation and before any
+	// dial: a missing TUN device or a missing root is an error of the command, not a
+	// failed attempt to retry.
+	requires := dp.Requires()
+	if requires.Unsupported != nil {
+		return fmt.Errorf("%s datapath: %w", kind, requires.Unsupported)
+	}
+	if requires.Admin && os.Geteuid() != 0 {
+		return fmt.Errorf("the %s datapath needs root: run sudo %s connect %q, or connect with -datapath socks",
+			kind, app.Name, profileName)
+	}
+
+	// The datapath that lives across sessions (the tun adapter) belongs to the
+	// supervisor: it starts and suspends it with the sessions.
+	if d, ok := dp.(supervisor.Datapath); ok {
+		tunnel.Supervisor.SetDatapath(d)
+	}
+
+	// Hold what has to be taken once, before the first attempt.
+	if r, ok := dp.(datapath.Reserver); ok {
+		release, err := r.Reserve()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
+
+	// Keep the core's own sockets out of a datapath that takes all system traffic, and
+	// follow the network changes.
+	if requires.Netguard {
+		adapter, ok := dp.(datapath.Adapter)
+		if !ok {
+			return fmt.Errorf("internal error: the %s datapath needs netguard but has no adapter index", kind)
+		}
+		if guard == nil {
+			return fmt.Errorf("internal error: the %s datapath needs netguard but the guard was not created", kind)
+		}
+		stop, err := app.EnableNetguard(app.NetguardOptions{
+			Guard:   guard,
+			Exclude: adapter.AdapterID,
+			Restart: tunnel.Supervisor.Restart,
+			Logf:    logf,
+		})
+		if err != nil {
+			return err
+		}
+		defer stop()
+	}
 
 	// Set up signal handling: first Ctrl+C stops cleanly, second does not wait.
 	ctx, cancel := context.WithCancel(ctx)
@@ -129,7 +207,8 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		go status.run(transitions, tunnel.Supervisor)
 	}
 
-	// Run the tunnel. The datapath is already running (started in NewSocks).
+	// Run the tunnel. The socks listener is already up; the tun adapter opens on the
+	// first session.
 	errCh := make(chan error, 1)
 	go func() { errCh <- tunnel.Supervisor.Run(ctx) }()
 

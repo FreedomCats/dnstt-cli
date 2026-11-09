@@ -38,6 +38,15 @@ type Session interface {
 	Close() error
 }
 
+// Datapath is the part of a datapath that goes with a session: the tun adapter. Start is
+// called for every session that passed the exit check, Suspend after every session, so the
+// routes and the system DNS never lead into an adapter that is not serving. The socks
+// datapath has no such part.
+type Datapath interface {
+	Start() error
+	Suspend() error
+}
+
 // Options are what a Tunnel is built from.
 type Options struct {
 	// Session is the configuration of every session: the tunnel, the uTLS distribution,
@@ -142,6 +151,7 @@ type Tunnel struct {
 	mu        sync.Mutex
 	state     State
 	resolver  string
+	datapath  Datapath      // set once before Run; nil — the datapath needs no session part
 	live      *live         // the session that is up; nil between sessions
 	ready     chan struct{} // closed when the next session is up
 	since     time.Time
@@ -189,6 +199,22 @@ func New(opts Options) (*Tunnel, error) {
 		ready:    make(chan struct{}),
 		stopping: make(chan struct{}),
 	}, nil
+}
+
+// SetDatapath gives Run the part of the datapath that goes with a session (the tun
+// adapter). It is called once before Run: the command builds the datapath after the
+// tunnel, because the datapath needs the tunnel's exit.
+func (t *Tunnel) SetDatapath(dp Datapath) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.datapath = dp
+}
+
+// sessionDatapath is SetDatapath's value for Run, read under mu.
+func (t *Tunnel) sessionDatapath() Datapath {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.datapath
 }
 
 // Restart ends the session or the attempt in progress with reason and dials again at once,
@@ -414,7 +440,9 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			}
 			continue
 		case err != nil:
-			// The handshake went through, the exit did not.
+			// The handshake went through, the exit did not. The same goes for a failed
+			// Start of the datapath below: the exit is not to blame for the local
+			// adapter.
 			s.Close()
 			round = nil
 			if exit.IsLogin(err) || errors.Is(err, exit.ErrNotSOCKS5) {
@@ -427,8 +455,32 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			continue
 		}
 
+		// The session is accepted and the exit is known to serve: only now may the
+		// system traffic lead into the datapath. A failed Start is an attempt failure,
+		// not a session one: the session is closed and tries again after the usual
+		// delay, with the resolver not blamed.
+		if dp := t.sessionDatapath(); dp != nil {
+			if err := dp.Start(); err != nil {
+				s.Close()
+				round = nil
+				prev = i - 1
+				if t.pause(ctx, name, err, t.backoff.next()) {
+					prev = -1
+				}
+				continue
+			}
+		}
+
 		round = nil
 		end := t.serve(ctx, name, s, took)
+		// Every path out of serve had a session: take the system traffic out of the
+		// datapath before the session is closed. An error here is the datapath's own
+		// and does not replace the outcome of the session; Close retries it.
+		if dp := t.sessionDatapath(); dp != nil {
+			if err := dp.Suspend(); err != nil {
+				t.logf("%s: datapath: %v", name, err)
+			}
+		}
 		switch {
 		case end.stop || t.fatalCause() != nil:
 			err := t.stop(nil)

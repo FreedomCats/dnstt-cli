@@ -24,6 +24,13 @@ const (
 // setter on Windows only binds: Mark is not used here.
 func (g *Guard) setter() setter { return setUnicastIf }
 
+// CheckFirewall finds nothing to check here: there is no firewalld. The WFP filters are a
+// later child.
+func (g *Guard) CheckFirewall() error { return nil }
+
+// CheckReversePath finds nothing to check here: the reverse path filter is a Linux sysctl.
+func (g *Guard) CheckReversePath() error { return nil }
+
 // choose chooses the interface (winsys.DefaultInterface) without setting it: Watch
 // first compares it with the previous one. exclude is the LUID of our own adapter.
 func choose(exclude uint64) (Choice, error) {

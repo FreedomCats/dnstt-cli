@@ -80,6 +80,10 @@ type Tun struct {
 // tunAdapter is what the platform hands to Tun. The functions capture the adapter name,
 // index, address and DNS; the remove and revert ones are harmless when repeated.
 type tunAdapter struct {
+	// id is the interface index of the adapter on Linux (the LUID on Windows), by which
+	// netguard excludes it from the physical interface choice. 0 until the adapter
+	// exists.
+	id uint64
 	// configure sets the adapter's address and MTU and brings it up. A repeated call
 	// reconfigures.
 	configure func() error
@@ -129,6 +133,17 @@ func NewTun(opts TunOptions) (*Tun, error) {
 // traffic. DNS protection is not here yet: it comes with the kill-switch child.
 func (t *Tun) Requires() Requirements {
 	return Requirements{Unsupported: tunUnsupported(), Admin: true, Netguard: true}
+}
+
+// AdapterID is the interface index of the adapter (Adapter): 0 before the first Start,
+// which opens it, and after Close, which removes it.
+func (t *Tun) AdapterID() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.adapter == nil {
+		return 0
+	}
+	return t.adapter.id
 }
 
 // Reserve takes the adapter lock for the whole run (Reserver): a second dnstt-cli with
@@ -269,6 +284,7 @@ func (t *Tun) logf(format string, args ...any) {
 }
 
 var (
+	_ Adapter    = (*Tun)(nil)
 	_ Persistent = (*Tun)(nil)
 	_ Reserver   = (*Tun)(nil)
 )
