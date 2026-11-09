@@ -76,9 +76,9 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
    enduring exit setting if supported, or record the measured rejection in the code comment
    and R3. Stage; split after the measured result determines the branch.
 8. [Synthetic danted one-write check](08-synthetic-danted/plan.md) — measure the
-   sequential/one-write exchange against a packaged `danted` with a login in a disposable
-   local environment, and publish the version, conditions and scope. Task; agent-run
-   synthetic evidence and documentation.
+   sequential/one-write exchange against a `danted` built from source, with a login, in a
+   disposable local environment, and publish the version, conditions and scope. Task;
+   agent-run synthetic evidence and documentation.
 
 The method is accepted before either tool extension. Both extensions preserve the accepted
 SOCKS5/HTTP comparison instead of recreating it. The timeout measurements depend only on
@@ -110,7 +110,7 @@ environment-scoped `danted` answer and says so, and the live SOCKS5 exit questio
   inherited environment, or call live services or resolvers. Changes to the user's service
   or network require their own authorization. One narrow exception is authorized here: the
   synthetic `danted` environment of child 8 is run by the agent because it is loopback-only
-  and generated-values-only, and pulling its container image and installing its package is a
+  and generated-values-only, and fetching its source archive and its build dependencies is a
   network fetch that needs the user's explicit permission in its own step.
 - The user authorized one narrow exception to the timeout probes' no-core-change boundary:
   the separate [context-aware initial DoT prerequisite](02-timeout-probes/03-dot-context/plan.md)
