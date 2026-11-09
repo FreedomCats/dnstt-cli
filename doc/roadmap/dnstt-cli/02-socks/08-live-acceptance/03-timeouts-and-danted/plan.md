@@ -11,9 +11,15 @@ The two preliminary numbers measured on the live server and set in the code, and
 SOCKS5 `danted` question answered. `E1`, `S8`; `architecture.md` R2, R3, §04, §08, §13.
 
 This stage stays focused on the SOCKS5 exchange in `internal/exit/socks5.go` and the
-server's `danted` service. Its probes use the SOCKS5 baseline child of the live-run
-tooling stage. HTTP CONNECT response timing and HTTP proxy behavior are outside this
-question and are handled by the HTTP exit and HTTP-comparison children.
+`danted` SOCKS5 service. Its probes use the SOCKS5 baseline child of the live-run tooling
+stage. HTTP CONNECT response timing and HTTP proxy behavior are outside this question and are
+handled by the HTTP exit and HTTP-comparison children.
+
+The user's server turned out to have no `danted`: its exit is an HTTP proxy. On the user's
+decision the one-write question is answered against a synthetic `danted` in a disposable
+local environment, with the version and conditions published and the scope stated (child 8).
+That result speaks about the measured service, not about the user's exit, and it does not
+turn their HTTP proxy into a SOCKS5 substitute.
 
 The dependency on `02-live-run-script` is retained as the preparation-stage gate before
 measurements; it no longer includes user-run acceptance. It does not make an HTTP proxy
@@ -29,9 +35,12 @@ a valid substitute for `danted`, and no HTTP-specific setting is added here.
   resolver, and no more.
 - **`danted`.** Whether it takes the SOCKS5 greeting, login and `CONNECT` in one write.
   If it does, the exit gets that as a setting (R3), saving two round trips per connection
-  with a login.
+  with a login. Measured on a synthetic service (child 8), because there is no real one on
+  the user's server.
 
-Measuring needs the user's server and resolvers. The probes extend the tool of
+Measuring the timeouts needs the user's server and resolvers. The `danted` question is
+measured locally with generated values instead, in a disposable environment of its own. The
+probes extend the tool of
 [Live-run tooling](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
 
 Where the numbers live now: `client.Config.KeepAliveTimeout` (0 — the upstream
@@ -54,9 +63,9 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
 3. [Local one-write SOCKS5 probe](03-danted-probe/plan.md) — add a bounded experimental
    sequential/one-write comparison over raw tunnel streams, with synthetic fixtures. Task;
    local tooling only.
-4. [Live one-write test against danted](04-danted-measurements/plan.md) — the user establishes
-   an authenticated SOCKS5 baseline and measures the sequential/one-write exchange through
-   the tunnel to their actual `danted`. Task; user-run evidence and documentation.
+4. [Live one-write test against danted](04-danted-measurements/plan.md) — dropped: the
+   user's server has no authenticated SOCKS5 service, so the live test cannot be performed.
+   Task; superseded by child 8.
 5. [Live timeout measurements and value selection](05-timeout-measurements/plan.md) — the
    user measures DoH, DoT and UDP; derive candidate values and obtain the user's timeout
    and recovery decision before product changes. Task; user-run evidence and documentation.
@@ -65,27 +74,44 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
    and test the degraded-state relationship. Task; product code and tests.
 7. [Resolve the measured danted result](07-danted-result/plan.md) — agree and implement the
    enduring exit setting if supported, or record the measured rejection in the code comment
-   and R3. Stage; split after the live result determines the branch.
+   and R3. Stage; split after the measured result determines the branch.
+8. [Synthetic danted one-write check](08-synthetic-danted/plan.md) — measure the
+   sequential/one-write exchange against a packaged `danted` with a login in a disposable
+   local environment, and publish the version, conditions and scope. Task; agent-run
+   synthetic evidence and documentation.
 
 The method is accepted before either tool extension. Both extensions preserve the accepted
 SOCKS5/HTTP comparison instead of recreating it. The timeout measurements depend only on
 their probe, and applying their selected values does not depend on the `danted` result.
-The `danted` probe and user-run test do not require a product setting to exist first.
-The `danted` test is the first user-run child so the unconfirmed service prerequisite is
-checked before product work. No child may close a live gate using a local fixture or
-HTTP success.
+The `danted` probe and the synthetic measurement do not require a product setting to exist
+first.
+
+Child 8 is numbered last because the earlier prefixes are taken: the dropped node keeps its
+number, and its directory is not renamed. Child 8 runs before child 7, which depends on its
+result. The `danted` measurement is no longer a user-run child, because there is no real
+service to run against; the synthetic environment replaces the missing prerequisite and
+brings its own user gate — permission for the container image and package fetch. No child may
+close a live gate using a local fixture or HTTP success: the synthetic result closes only the
+environment-scoped `danted` answer and says so, and the live SOCKS5 exit question stays with
+[Live runs](../04-live-runs/plan.md).
 
 ## Execution boundaries and user gates
 
-- A SOCKS5 service with a login on the user's server is a prerequisite to confirm, not an
-  established fact. Preparation can finish without it. If it is unavailable, keep the
-  affected live child open and ask the user about the prerequisite or scope; neither an
-  HTTP service nor a failed setup proves that `danted` rejects one-write exchanges.
+- The authenticated SOCKS5 service on the user's server was a prerequisite to confirm, and it
+  does not exist: the exit there is an HTTP proxy. On the user's decision the `danted`
+  question is answered on a synthetic service in a disposable local environment (child 8),
+  under its own environment-scoped criteria. The live SOCKS5 exit question stays with
+  [Live runs](../04-live-runs/plan.md). Neither an HTTP service nor a failed setup proves
+  that `danted` rejects one-write exchanges, and the synthetic result proves nothing about
+  the user's exit.
 - The user performs all real runs from the local instructions. Agent implementation and
   checks use synthetic temporary profiles/stores, generated identities and loopback only.
   They must not read, stat or modify actual profile/config/secret data or metadata, dump
   inherited environment, or call live services or resolvers. Changes to the user's service
-  or network require their own authorization.
+  or network require their own authorization. One narrow exception is authorized here: the
+  synthetic `danted` environment of child 8 is run by the agent because it is loopback-only
+  and generated-values-only, and pulling its container image and installing its package is a
+  network fetch that needs the user's explicit permission in its own step.
 - The user authorized one narrow exception to the timeout probes' no-core-change boundary:
   the separate [context-aware initial DoT prerequisite](02-timeout-probes/03-dot-context/plan.md)
   repairs caller-context propagation and the uTLS handshake, with maintained vendor
@@ -115,8 +141,11 @@ HTTP success.
 ## Local validation for code children
 
 Use cached dependencies only (`GOPROXY=off`, `GOSUMDB=off`, `GOTOOLCHAIN=local`); add no
-dependency and perform no external fetch, netns check or network mutation. Keep build/test
-artifacts outside tracked paths. For the relevant code children:
+dependency and perform no external fetch, netns check or network mutation. The single
+exception is the synthetic `danted` environment of child 8: its image pull and package
+install are the user-permitted fetch, they land only inside the disposable container and
+change nothing on the host. Keep build/test artifacts outside tracked paths. For the
+relevant code children:
 
 - Run focused race regressions and the explicit tool race suite
   (`go test -race -count=1 ./doc/runs/_live`) when tooling changes. Preserve the existing
@@ -136,8 +165,9 @@ artifacts outside tracked paths. For the relevant code children:
   `go list ./...`, Git ignore rules and privacy. Never force-add `doc/runs/` or `doc/local/`.
 
 Documentation-only and user-evidence children require link, consistency and privacy checks,
-not a new code build. The pre-existing signal-reader follow-up stays separate unless a
-concrete regression from this work is demonstrated.
+not a new code build; the synthetic-environment child adds a disposable local run under the
+same documentation and privacy checks. The pre-existing signal-reader follow-up stays
+separate unless a concrete regression from this work is demonstrated.
 
 ## Done when
 
@@ -148,11 +178,15 @@ concrete regression from this work is demonstrated.
   by, are set in the code: `connect` sets the keepalive timeout of its sessions, the
   handshake timeout replaces the preliminary 20 s, `resolvers check` uses the same
   handshake timeout, and `DefaultDegradedAfter` is checked against both. Tests pass.
-- A one-write SOCKS5 greeting, login and `CONNECT` sent through the tunnel to the user's
-  `danted` has a recorded answer: taken or not.
+- A one-write SOCKS5 greeting, login and `CONNECT` sent through the tunnel to `danted` has a
+  recorded answer: taken or not. Because the user's exit is an HTTP proxy, the answer comes
+  from the synthetic `danted` of child 8, with the measured version and conditions recorded
+  next to it.
 - If it is taken: the SOCKS5 exit has the setting, the profile has a key for it with
-  validation, and tests cover both ways of the exchange. If not: the comment in
-  `internal/exit/socks5.go` and R3 say that `danted` does not take it.
+  validation after the user's decision on its contract, and tests cover both ways of the
+  exchange. If not: the comment in `internal/exit/socks5.go` and R3 say that the measured
+  `danted` version does not take it under the measured conditions, and that the evidence is
+  synthetic; no claim is made about the user's exit or other deployments.
 
 ## Risks and what is needed from the user
 
@@ -162,5 +196,11 @@ concrete regression from this work is demonstrated.
   10 s: a resolver that holds or drops answers stretches it. The timeout is derived from
   the slowest transport that is meant to work, not from R2's 30 s; if that is far from
   30 s, R2 is corrected in [Recording the results](../05-record-results/plan.md).
-- Needed from the user: idle sessions of several minutes over each transport, and a
-  `danted` with a login on their server. An HTTP proxy is not part of this measurement.
+- A negative `danted` answer is scoped to the measured version and synthetic conditions and
+  must be published that way: it is not a statement about every deployment, and it cannot be
+  used as an answer for the user's HTTP exit. A positive one still needs the user's enduring
+  key/default/behavior decision before any code.
+- Needed from the user: idle sessions of several minutes over each transport, and — for the
+  `danted` question — permission for the synthetic environment's container image and package
+  fetch. There is no `danted` on their server, and an HTTP proxy is not part of this
+  measurement.

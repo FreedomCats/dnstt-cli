@@ -1,12 +1,14 @@
 ---
 kind: task
-status: blocked
+status: dropped
 depends: [03-danted-probe]
 ---
 
 # Live one-write test against danted
 
 ## Task
+
+Historical scope, not performed — see Dropped below.
 
 The user answers the SOCKS5 one-write question against their actual `danted` with a login,
 using the accepted [experimental probe](../03-danted-probe/plan.md) and
@@ -50,14 +52,22 @@ exit, a target it permits and a resolver carrying that tunnel. If these cannot b
 report the unmet gate and ask about the prerequisite or stage scope; do not replace it
 with the selected HTTP service or interpret absence as one-write rejection.
 
-## Blocked
+## Dropped
 
-The user reports that their server has no `danted`: the exit there is a proxy, as the user
-understands it. The live SOCKS5 one-write test against the user's actual service therefore
-cannot be performed. A `danted` run on a local machine or in a container would test only
-that synthetic service, not the user's exit, and is not a substitute answer.
+The user reports that their server has no `danted`: the exit there is an HTTP proxy. The
+live SOCKS5 one-write test against the user's actual service therefore cannot be performed,
+and a `danted` run on a local machine or in a container would test only that synthetic
+service, not the user's exit.
 
-The node waits for a user decision: drop the question for this server, provide another real
-authenticated SOCKS5 exit, or explicitly accept a synthetic `danted` check as a separate,
-differently scoped result. The accepted local probe remains ready and unchanged; no
-rework is needed if a real service appears later.
+The user decided the three open alternatives: the question is not marked inapplicable for
+this server, no other real authenticated SOCKS5 exit is provided, and the answer is not
+deferred. Instead a [synthetic danted one-write check](../08-synthetic-danted/plan.md) is
+accepted as a separate result with its own, explicitly bounded criteria. That node carries
+the measurement; this one is dropped rather than repurposed, because its criteria name the
+user's actual service and no synthetic outcome may be recorded against them.
+
+What is preserved: the accepted [probe](../03-danted-probe/plan.md) and
+[method](../01-measurement-method/plan.md) are ready and unchanged, and the live instrument
+needs no rework if a real authenticated SOCKS5 exit appears later — this node can then be
+revived instead of rewritten. A missing service is still not a rejection of one-write
+exchanges.
