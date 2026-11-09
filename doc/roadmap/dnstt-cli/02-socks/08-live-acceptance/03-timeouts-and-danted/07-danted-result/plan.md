@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 938b7fc
 depends: [08-synthetic-danted]
 ---
 
@@ -11,25 +12,71 @@ Resolve the branch established by the
 stage's complete criterion. The user's server has no `danted` (its exit is an HTTP proxy), so
 the evidence is environmental and scoped: it speaks about the measured version in the
 measured conditions, not about the user's exit. A supported one-write exchange becomes an
-enduring exit setting with validation and tests after the user approves its contract. A
-measured rejection is recorded in `internal/exit/socks5.go` and architecture R3 as an
-environment-scoped negative result, without adding an unused key. An inconclusive series, an
-unqualified environment or an unavailable service is neither branch and keeps this node open.
+enduring exit setting with validation and tests after the user approves its contract; the
+approval is recorded in `## Accepted contract` below. A measured rejection is recorded in
+`internal/exit/socks5.go` and architecture R3 as an environment-scoped negative result,
+without adding an unused key. An inconclusive series, an unqualified environment or an
+unavailable service is neither branch and keeps this node open.
 
 This is a stage because the positive branch includes an enduring user format/behavior
-decision and subsequent product implementation that can be accepted separately. Split it
-when the evidence exists. Do not preselect a key name, type or default, or write code behind
-a temporary format. The user contract must address authentication methods and early
-credential transmission, behavior for no-login profiles and incompatible servers, and any
-fallback/retry policy. The current sequential path offers no authentication too and can
-avoid sending the password; preserve it until an explicit decision authorizes a change.
+decision and subsequent product implementation that can be accepted separately. The
+evidence exists and the user accepted the contract, so the branch is split into the children
+below; the key name, type and default are no longer open. The sequential path remains the
+default (`one_write = false`) and still offers authentication "none" with a login, so it
+does not send the password unless the exit asks for it; the accepted contract keeps that for
+the default and pays the early password only in the one-write mode.
 
 Expected positive-branch product scope: `internal/exit/socks5.go`, its protocol/fixture and
 tunnel tests, `internal/config/profiles.go` and round-trip/validation tests, and the binding
-in `internal/app/tunnel.go` with its tests. The key, default and limits are documented with
-reserved examples in the existing example/architecture documentation. A profile field and
-its sole consumer are one atomic product result, not independently usable file-only tasks.
-The experimental ignored probe remains an independent control rather than product code.
+in `internal/app/tunnel.go` with its tests. The children divide that scope by result: the
+exchange mechanism first, then the key together with its sole consumer, then the
+documentation. The key, default and limits are documented with reserved examples in the
+existing example/architecture documentation. A profile field and its sole consumer are one
+atomic product result, not independently usable file-only tasks. The experimental ignored
+probe remains an independent control rather than product code.
+
+## Children
+
+1. [One-write SOCKS5 exchange](01-one-write-exchange/plan.md) — the exit sends the greeting,
+   the RFC 1929 login and the `CONNECT` in one Write and reads the three replies in order,
+   with the sequential path unchanged and the contract's failure behavior. Task;
+   `internal/exit/socks5.go`, its fixtures and the generated loopback tunnel test.
+2. [Profile key and binding](02-profile-key-and-binding/plan.md) — `exit.one_write` in
+   `internal/config/profiles.go` with its validation, and its sole consumer, the SOCKS5
+   dialer built by `internal/app/tunnel.go`, while the startup `Check` stays sequential.
+   Task; the field and its consumer are one product result. Depends on child 1.
+3. [Documentation and handoff](03-documentation-and-handoff/plan.md) — R3, §10 and the
+   reserved example carry the setting, its default and the measured scope, with the handoff
+   for [Recording the results](../../05-record-results/plan.md). Task; documentation only.
+   Depends on child 2.
+
+The mechanism comes first: the key must not exist before there is something to turn on. The
+key and its binding follow together, because a field with no consumer and a consumer with no
+field are each unusable. The documentation comes last so that it describes the shipped
+behavior and the error the user sees. The positive branch is the evidence-supported one, so
+the children implement it; the rejection criteria stay in `## Done when` untouched, for the
+branch the evidence does not support, and no child takes that branch.
+
+## Accepted contract
+
+The user accepted the positive branch on the synthetic evidence with this enduring contract:
+
+- a boolean `one_write` in the exit section of the profile (`[profile.<name>.exit]
+  one_write = true`), default `false`;
+- it applies to `exit.type = "socks5"` only; an empty type counts as socks5, and the key
+  with `http` or `ssh` is a validation error;
+- with `one_write = true` the greeting, the RFC 1929 login and the `CONNECT` request go in
+  one Write: with a login the greeting offers only method `0x02`, so the password is sent
+  before the method is confirmed — the documented price of the saved round trips; without a
+  login the greeting offers only `0x00` and the `CONNECT` follows;
+- the startup `Check` stays sequential: it has no target and must work against any server;
+- an exit that chooses another method, refuses the login or does not take the batch yields a
+  clear error that names the key, with no automatic fallback and no second stream; the user
+  turns the key off;
+- R3 and the reserved example carry the measurement (`danted` 1.4.4) and its limits.
+
+Rejected: default `true` (a server that reads one message per `recv` would hang); no key at
+all (the measured result would stay unused); a second flag for early credentials.
 
 ## Done when
 
