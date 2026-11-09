@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -85,3 +85,44 @@ gVisor sources by hand.
 ## Depends on
 
 Nothing. The stage's [foundation](../../01-foundation/plan.md) is done.
+
+## Outcome
+
+The gVisor netstack and the TCP path are in `internal/datapath`; the dependency is pinned
+and the task's checks pass.
+
+- `gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c` (Apache-2.0) is in `go.mod` and
+  `go.sum`. The latest upstream version requires Go 1.27.3, while the module declares go
+  1.26.2 and no newer toolchain is authorized; the pinned version builds with the module's
+  Go version, is the version csqtt-cli used for its netstack, and was already in the module
+  cache, so the authorized one-time download was not needed. `go mod tidy` added
+  `github.com/google/btree` and `golang.org/x/time` as indirect dependencies, marked
+  `github.com/pelletier/go-toml/v2` as direct because `internal/config` imports it
+  directly, and moved the transitive `go-spew` and `yaml.v3` selections to the higher
+  versions gVisor's `go.mod` requires; no `require` version of the project changed.
+- `datapath.TunnelMTU = 1500` (R7: TCP ends in the shell).
+- The `netstack` type is IPv4 and TCP only; its NIC sits on a `stack.LinkEndpoint` supplied
+  from outside (a channel endpoint in the tests, `fdbased` for the adapter later), runs in
+  promiscuous and spoofing mode, has the IPv4 default route, and takes the adapter's `/32`
+  as a local address through `addAddress`/`removeAddress`.
+- The TCP forwarder creates the endpoint for every connection request, completes the
+  request on every path, dials the original destination through `exit.Dialer` with the
+  SOCKS5 60-second bound, and relays with the shared `relay`. A refused dial or a failed
+  endpoint creation resets the client instead of leaving it to time out. `close` is
+  idempotent: it cancels the context, closes and waits for the stack, and waits for the
+  relay goroutines; no goroutine is added once it waits.
+- `inject` drops everything that is not IPv4 (empty and short packets included), `next`
+  hands outbound packets to a writer, and `pump` joins two stacks in the tests. The
+  in-flight limit is 1024 and the receive window 64 KiB, as constants with their reasons.
+- Tests on two stacks joined by channel endpoints cover data in both directions through an
+  echo server, the original destination seen by the fake exit, four concurrent
+  connections, an immediate error on a refused exit dial, no goroutines left after
+  `close`, a connection open at close ending without a panic, and address add/remove.
+- `gofmt` is clean, the CI vet split passes (full `go vet ./...` still fails only on the
+  two pre-existing upstream warnings in `core/noise`), `go test -race -count=1
+  ./internal/datapath` and the full `go test -race -count=1 ./...` pass, and both
+  `CGO_ENABLED=0 go build ./...` and `GOOS=windows CGO_ENABLED=0 go build ./...` succeed.
+- Independent review found no defects. The datapath race tests were stable over ten runs.
+- Next: [DNS over TCP, other UDP and IPv6](../02-dns-udp-ipv6/plan.md) on the same stack.
+
+No real problem was left incompletely fixed because of cost.

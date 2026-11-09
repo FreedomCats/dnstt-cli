@@ -5,6 +5,10 @@ package datapath
 
 import "net/netip"
 
+// TunnelMTU is the MTU of the adapter in tun mode. TCP ends in the shell, so the adapter's
+// MTU does not depend on the DNS channel (architecture.md R7).
+const TunnelMTU = 1500
+
 // Requirements are the conditions a datapath works on. The zero value is "nothing
 // needed": that is socks, run by an ordinary user.
 type Requirements struct {
