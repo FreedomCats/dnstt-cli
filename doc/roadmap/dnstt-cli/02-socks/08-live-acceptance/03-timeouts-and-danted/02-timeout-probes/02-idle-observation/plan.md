@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 depends: [01-fresh-dial]
 ---
@@ -288,3 +288,80 @@ return it to lead; do not force it into this tool task. No user access is needed
 acceptance; actual SOCKS5 availability, several-minute transport evidence and the
 timeout/recovery decision remain later gates. Command-option plumbing and the digest
 criterion implement the accepted method and select no product authentication or timeout policy.
+
+## Outcome
+
+The existing ignored tool now provides `timeout-idle`, with safe help and early validation
+of explicit positive dial, keepalive, window, polling and verification controls, an HTTP(S)
+target without credentials, and its complete expected-body SHA-256. The README supplies
+reserved DoH, DoT and UDP examples, initial five-minute guidance, result codes and complete
+record mapping to the unchanged Healthy Idle Windows form. No live run or product value
+was selected.
+
+The command refuses non-SOCKS5 exits before secret lookup, network-DNS selection or traffic
+and reads only the selected password reference. Existing raw preparation preserves one
+effective resolver, R5 bootstrap/cache behavior, pins, literals, original TLS hostname,
+fixed first network DNS and uTLS. Exactly one raw dial supplies the original session for
+both checks and the observation; no supervisor, retry, resolver switch or replacement
+session participates. The accepted initial DoT prerequisite remains unchanged.
+
+Independent sequential SOCKS5 checks observe actual username/password method selection
+and RFC 1929 login, complete CONNECT, and verify the entire expected 2xx response body.
+No-auth success cannot qualify the experiment. Target names stay remote, redirects are
+refused, and HTTPS retains normal certificate verification. A synchronous private target
+transport reuses standard TLS/HTTP parsing and the existing streaming probe while keeping
+acquisition, protocol, body, closure and eventual results under one joined worker. Deadline
+or interruption tears down the sole session when necessary. Every pre-check stream is
+closed and zero local streams confirmed before baseline; post-check starts only after the
+actual final snapshot is frozen. Final cleanup confirms both Close return and Done.
+
+The window sends no application traffic. It retains every actual monotonic observation
+and full-width receive counter, polling spacing/lateness and final overshoot. The estimator
+applies the accepted progress-width, connecting-gap and leading/trailing formulas without
+sorting or repairing anomalies. No-progress runs retain censored boundary evidence.
+Window completion, primary end reason, post-check and cleanup remain separate, and failures
+cannot qualify a healthy maximum. The API's silent category is not stronger causal evidence.
+
+Incremental private records preserve nanoseconds and uint64 values while filtering string
+inputs before encoding. Mandatory encoded records are bounded before the logger; oversized
+setup stops before dial. Private resolver mapping remains available, while public output
+also hides original and canonical resolver/bootstrap spellings, including bare IPv6.
+Identity, references, credentials and target-bearing diagnostics stay filtered. Short writes,
+output errors or log-close failures prevent complete saved-evidence acceptance and retain
+the available partial trace and primary reason.
+
+Two accepted review findings were fully corrected in one correction round. Informational
+HTTP responses, including Early Hints, now advance to the final response with buffered body
+bytes preserved; protocol switching is refused. Response status lines and interim/final
+headers share a fixed private byte and metadata budget before standard parsing, with safe
+overflow failure; response bodies remain streamed. Exact-boundary, oversized, cumulative,
+fragmented and generated-session regressions pass. No finding was rejected or left partly
+fixed because of cost. Final independent review explicitly approves the complete task and
+finds no new defect or regression.
+
+Fresh final checks pass for nineteen focused idle test groups with race and no skips, the
+full explicit tool race suite, Linux/Windows tool vet and builds, and Windows tool test
+compilation. The built-command generated-loopback run verifies both same-session checks,
+receive progress, the frozen boundary and confirmed cleanup; actual interruption retains
+incomplete evidence and joins its child and fixtures. Both-exit selftest/redaction passes
+HTTP/HTTPS while the server is up and its existing HTTPS-only down loop. Final review
+independently reran affected races, platform tool checks and the built-command scenarios,
+and verified the matching selftest evidence. Synthetic profile/store bytes and metadata
+remain unchanged.
+
+Broad product/core evidence was retained only after matching all thirteen reviewed
+prerequisite files, the complete core manifest and all tracked build/test/CI inputs to the
+accepted core. It covers applicable project races, all twenty mandatory isolated D-Bus/
+keyring cases without skips, static builds, the exact Linux/Windows CI vet split, and the
+Windows product plus all nineteen applicable project test-package compilations. Exactly
+the four specified external TCP/DNS tests remain excluded, netns checks are disabled and
+TestDNSGuardPermitsPrograms is compilation-only. No Windows binary was executed.
+
+Formatting, whitespace, relative links, English, privacy, ignore rules and package-list
+exclusion pass. The task changes ten ignored tool files; sixteen other original files are
+unchanged. Only this completed roadmap node is committed. No product/core/API/profile/
+dependency change, actual configuration/store access, external resolver/service, fetch,
+network/trust mutation, live measurement, danted result, selected timeout policy or Windows
+runtime/DPAPI acceptance belongs to this task. The existing CLI signal-reader and
+source-confirmed socket-tracking lock follow-ups remain unchanged and separate. Lead owns
+parent-stage acceptance and the later one-write, service, live-measurement and policy gates.
