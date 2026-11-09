@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 9e7a9f8
 depends: [05-protection]
 ---
 
@@ -34,6 +35,21 @@ the user-run matrix and the record of its results.
 - The results and the course of the runs go to `doc/local/` and `doc/runs/`, outside git;
   `README.md` gets the leak matrix, and `architecture.md` gets the settled values, without
   addresses, resolvers, environment or dates (`AGENTS.md`).
+
+## Children
+
+1. [Runbook and evidence form](01-runbook/plan.md) — the user-run checklist with placeholders,
+   the exact commands, the expected observations and the private evidence layout. Task; docs
+   only.
+2. [The Linux matrix by the user](02-user-run/plan.md) — the user runs P0–P8 on the real machine
+   and fills the checklist; agents do not run it. Task; user-run.
+3. [Recording the results](03-record/plan.md) — the sanitized leak matrix in `README.md`, the
+   settled values in `architecture.md` and this stage's `Outcome`. Task.
+
+The runbook is prepared and reviewed before the user starts, so that a mistake in a command
+costs a line and not a wasted session. The matrix is then run in the user's time; the record
+task writes only what the runs settled and keeps every value that identifies the user out of
+the repository.
 
 ## Done when
 
