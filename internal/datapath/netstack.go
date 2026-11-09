@@ -64,8 +64,11 @@ type netstack struct {
 }
 
 // newNetstack starts the stack on link. tunDNS, when set, is the DNS behind the exit that
-// the DNS listener of the adapter's address will reach. The stack owns the link and closes
-// it in Close.
+// the DNS listener of the adapter's address will reach. The link endpoint is not closed by
+// close: fdbased's Close is a no-op. close removes the NIC, which detaches the endpoint and
+// stops its reader; the fd belongs to the caller, who closes it after close returns.
+// Attach(nil) and Wait are needed only in the error paths of newNetstack, where the stack
+// is not reachable.
 func newNetstack(link stack.LinkEndpoint, dialer exit.Dialer, tunDNS netip.Addr) (*netstack, error) {
 	if link == nil {
 		return nil, errors.New("netstack: no link endpoint")
@@ -329,7 +332,8 @@ func (n *netstack) next(ctx context.Context, write func([]byte)) bool {
 }
 
 // close stops the stack and waits for the streams, the DNS read loop and its exchanges.
-// Repeated calls are harmless.
+// The link is not closed: removing the NIC detaches a fdbased endpoint and stops its
+// reader, and the fd and the endpoint belong to the caller. Repeated calls are harmless.
 func (n *netstack) close() {
 	n.once.Do(func() {
 		// closed and the listener are taken under one lock: no read loop is started once

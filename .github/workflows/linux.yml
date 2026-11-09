@@ -79,6 +79,7 @@ jobs:
         run: |
           mkdir -p build/out
           go test -c -o build/out/linuxsys.test ./internal/linuxsys
+          go test -c -o build/out/datapath.test ./internal/datapath
 
       # A skip here is a failure too: it means the network checks did not run at all.
       # IPv6 is switched on in the container explicitly: without it the IPv6 block checks
@@ -90,14 +91,20 @@ jobs:
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             -e DNSTT_CLI_TEST_NETNS=1 -v "$PWD/build/out":/dnstt-cli:ro "$IMAGE" \
             /dnstt-cli/linuxsys.test -test.count=1 -test.v | tee build/out/linuxsys.log
-          if grep -- '--- SKIP' build/out/linuxsys.log; then
-            echo "::error::linuxsys: tests skipped"
-            exit 1
-          fi
-          if ! grep -q -- '--- PASS' build/out/linuxsys.log; then
-            echo "::error::linuxsys: no tests"
-            exit 1
-          fi
+          docker run --rm --cap-add NET_ADMIN --device /dev/net/tun \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            -e DNSTT_CLI_TEST_NETNS=1 -v "$PWD/build/out":/dnstt-cli:ro "$IMAGE" \
+            /dnstt-cli/datapath.test -test.count=1 -test.v | tee build/out/datapath.log
+          for log in build/out/linuxsys.log build/out/datapath.log; do
+            if grep -- '--- SKIP' "$log"; then
+              echo "::error::$log: tests skipped"
+              exit 1
+            fi
+            if ! grep -q -- '--- PASS' "$log"; then
+              echo "::error::$log: no tests"
+              exit 1
+            fi
+          done
 
   # The dnstt core: core/ against the mirror at the commit of CORE_VERSION and the rules.
   core:

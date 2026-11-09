@@ -11,6 +11,78 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ConfigurePointToPoint makes our own adapter one end of a point-to-point link: addr/32
+// with peer/32, the MTU, and the link up. Counterpart of ConfigureAdapter for a link with
+// a peer (the tun adapter).
+//
+// The peer is not decoration: with it the kernel routes packets for peer into the
+// adapter. An address assigned only locally would be delivered by the kernel itself
+// (through lo), and nothing addressed to it would ever reach the tunnel.
+//
+// Calling it again reconfigures: global addresses other than addr are removed (on our own
+// adapter they are all ours), the automatic fe80:: is left alone, and AddrReplace updates
+// the peer of addr. An MTU below 1280 leaves no IPv6 on the interface: an IPv6 address is
+// then not set, which is reported through logf.
+func ConfigurePointToPoint(index int, addr, peer netip.Addr, mtu int, logf func(string, ...any)) error {
+	addr, peer = addr.Unmap(), peer.Unmap()
+	if !addr.IsValid() || !peer.IsValid() {
+		return fmt.Errorf("point-to-point link: address %v, peer %v", addr, peer)
+	}
+	if addr.BitLen() != peer.BitLen() {
+		return fmt.Errorf("point-to-point link: address %v and peer %v are of different families", addr, peer)
+	}
+	link, err := netlink.LinkByIndex(index)
+	if err != nil {
+		return fmt.Errorf("interface %d: %w", index, err)
+	}
+	name := link.Attrs().Name
+	if mtu > 0 && link.Attrs().MTU != mtu {
+		if err := netlink.LinkSetMTU(link, mtu); err != nil {
+			return fmt.Errorf("MTU %d on %s: %w", mtu, name, err)
+		}
+	}
+	if addr.Is6() && mtu > 0 && mtu < minMTU6 {
+		logf("[TUN] address %v not set: with MTU %d the kernel does not keep IPv6 on the interface", addr, mtu)
+	} else {
+		have, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+		if err != nil {
+			return fmt.Errorf("addresses of %s: %w", name, err)
+		}
+		for _, h := range have {
+			if h.Scope != unix.RT_SCOPE_UNIVERSE {
+				continue
+			}
+			a, ok := netip.AddrFromSlice(h.IP)
+			if ok && a.Unmap() == addr {
+				continue
+			}
+			if err := netlink.AddrDel(link, &h); err != nil {
+				return fmt.Errorf("removing address %v from %s: %w", h.IPNet, name, err)
+			}
+		}
+
+		// AddrReplace sends addr in IFA_LOCAL and the peer in IFA_ADDRESS, and takes
+		// the prefix length from the peer's mask: both are full-length prefixes here.
+		a := &netlink.Addr{
+			IPNet: &net.IPNet{IP: addr.AsSlice(), Mask: net.CIDRMask(addr.BitLen(), addr.BitLen())},
+			Peer:  &net.IPNet{IP: peer.AsSlice(), Mask: net.CIDRMask(peer.BitLen(), peer.BitLen())},
+		}
+		if addr.Is6() {
+			// Duplicate address detection is pointless on a point-to-point link, and
+			// while it runs the address is "tentative" and sockets cannot bind to it.
+			a.Flags = unix.IFA_F_NODAD
+		}
+		if err := netlink.AddrReplace(link, a); err != nil {
+			return fmt.Errorf("address %v with peer %v on %s: %w", addr, peer, name, err)
+		}
+	}
+
+	if err := netlink.LinkSetUp(link); err != nil {
+		return fmt.Errorf("bringing up %s: %w", name, err)
+	}
+	return nil
+}
+
 // minMTU6 is the smallest MTU at which the kernel keeps IPv6 on an interface
 // (RFC 8200). With a smaller MTU the kernel removes IPv6 from the interface entirely.
 const minMTU6 = 1280
