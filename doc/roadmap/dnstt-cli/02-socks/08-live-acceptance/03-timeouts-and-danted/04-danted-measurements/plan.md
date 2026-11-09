@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: blocked
 depends: [03-danted-probe]
 ---
 
@@ -49,3 +49,15 @@ Actual `danted` availability is unknown. The user needs a working authenticated 
 exit, a target it permits and a resolver carrying that tunnel. If these cannot be supplied,
 report the unmet gate and ask about the prerequisite or stage scope; do not replace it
 with the selected HTTP service or interpret absence as one-write rejection.
+
+## Blocked
+
+The user reports that their server has no `danted`: the exit there is a proxy, as the user
+understands it. The live SOCKS5 one-write test against the user's actual service therefore
+cannot be performed. A `danted` run on a local machine or in a container would test only
+that synthetic service, not the user's exit, and is not a substitute answer.
+
+The node waits for a user decision: drop the question for this server, provide another real
+authenticated SOCKS5 exit, or explicitly accept a synthetic `danted` check as a separate,
+differently scoped result. The accepted local probe remains ready and unchanged; no
+rework is needed if a real service appears later.
