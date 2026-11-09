@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 depends: [01-measurement-method, 02-timeout-probes]
 ---
@@ -286,3 +286,56 @@ collects paired live evidence. Functional early-credential testing is already pa
 explicit experiment; product method selection, no-auth behavior and any key/default or
 fallback still require the later user contract. A working local fixture or HTTP exit does
 not settle those gates, and a live failure without working paired controls is inconclusive.
+
+## Outcome
+
+The ignored tool now provides one usable `danted-probe` command. It runs authenticated
+sequential controls and one-write treatments on fresh streams of one original raw session,
+with identical credentials and target authority. Both paths offer only method `0x02`;
+early credential transmission requires explicit acknowledgement and changes no product
+authentication policy. Invalid inputs are refused safely before configuration access.
+
+- An independent RFC 1928/1929 implementation validates every method, login and complete
+  CONNECT response. Treatment makes exactly one complete owned-stream Write before any
+  Read, with no retry or fallback after a short or failed batch. Verified HTTP(S) data uses
+  the accepted streamed full-body digest, standard TLS, redirect refusal and bounded
+  response parsing; first target bytes are preserved.
+- Trial ownership covers acquisition, protocol, target and closure. Late results, workers,
+  streams and teardown are joined without replacing the session. Actual phase, exchange,
+  target and cleanup timings remain distinct; treatment completion offsets are explicitly
+  batch-relative. Failed controls, ordinary failures, limits, interruptions and unstarted
+  paths remain attributable rather than becoming a compatibility verdict.
+- Bounded incremental evidence preserves numeric/schema integrity and filters identities,
+  credentials, target strings and public resolver variants. Sink I/O is outside measured
+  protocol work. A stalled post-trial sink triggers joined session cleanup and cannot
+  start another path; an arbitrary permanently blocked synchronous writer can still hold
+  the CLI until it returns. This limitation is explicit and no writer is detached.
+- Independent buffered fixtures, generated loopback sessions, HTTP/HTTPS targets and real
+  process interruption establish the instrument. Five accepted review findings were fully
+  corrected: measured-path evidence I/O, IDNA TLS naming, DNS hostname length, preservation
+  of the primary stop reason, and cleanup of unused synthetic HTTP targets. Re-review
+  approves all ten Steps and eight Done-when criteria; no finding was rejected or deferred.
+- Fresh final-input focused and complete tool races, actual command success/rejection/
+  stall/SIGINT, platform tool checks and both-exit selftest pass. The final independent
+  full tool run has 93 top-level tests and 460 passing test events. The applicable project
+  race, twenty mandatory isolated D-Bus/keyring passes, static builds, exact Linux/Windows
+  CI vet split, Windows product and nineteen project test compilations are covered by
+  verified matching-input evidence, with execution versus retention recorded privately.
+  Exactly four external TCP/DNS tests are excluded, netns tests remain disabled and Windows
+  DNSGuard is compilation-only. No Windows runtime or additional HTTP-down coverage is
+  claimed.
+- README syntax, warning, timer interpretation and mapping into the unchanged private form
+  are usable. Formatting, links, English, privacy, ignore rules and package exclusion pass.
+  The complete task surface is thirteen ignored tool files; twenty-two unrelated existing
+  tool files are unchanged. No product/core/API/profile/dependency, vendor or policy change
+  was needed. Comparison, both exits, secret-input ceiling and timeout probes are preserved.
+
+Original temporary baseline and earlier captures became unavailable during the work, with
+no established cause. They were not presented as retained evidence: broad checks were
+rerun and their current bindings, later corrections and independent acceptance were saved
+privately. No accepted correction remains partly fixed because of cost. The separate
+pre-existing signal-reader and socket-tracking-lock follow-ups remain unchanged.
+
+This local acceptance establishes neither authenticated danted availability nor live
+compatibility, server read boundaries, fixed latency savings, timeout values or an enduring
+key/default/authentication/fallback contract. Those user-run and decision gates stay open.
