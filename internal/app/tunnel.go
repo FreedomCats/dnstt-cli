@@ -33,6 +33,9 @@ type TunnelOptions struct {
 	Logf func(format string, args ...any)
 	// OnTransition receives every state change of the supervisor; nil — silent.
 	OnTransition func(supervisor.Transition)
+	// Notice receives the user-facing lines about system traffic between sessions; nil —
+	// Logf.
+	Notice func(format string, args ...any)
 	// Control is the socket hook of the core: netguard.Guard.Control for a datapath that
 	// takes all system traffic. nil — the core's sockets are left as they are (socks).
 	Control func(network, address string, c syscall.RawConn) error
@@ -83,9 +86,11 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 	}
 	pool := resolvers.NewPool(expanded)
 
-	// Read profile bootstrap servers once; network servers remain dynamic.
+	// Read profile bootstrap servers once; network servers remain dynamic. The bootstrap
+	// sockets carry the same Control as the core's: under a closed kill-switch they are
+	// the core's sockets too.
 	networkDNS := SystemNetworkDNS
-	bootstrap, err := newProfileBootstrap(prof.Bootstrap, expanded, networkDNS)
+	bootstrap, err := newProfileBootstrap(prof.Bootstrap, expanded, networkDNS, opts.Control)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -149,6 +154,7 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 		NetworkDNS:   networkDNS,
 		CheckExit:    checkExit,
 		OnTransition: opts.OnTransition,
+		Notice:       opts.Notice,
 		Logf:         opts.Logf,
 	})
 	if err != nil {
@@ -186,7 +192,7 @@ func (h *httpExit) Dial(ctx context.Context, address string) (net.Conn, error) {
 	return conn, err
 }
 
-func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS func() ([]netip.Addr, error)) (*resolvers.Bootstrap, error) {
+func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS func() ([]netip.Addr, error), control func(network, address string, c syscall.RawConn) error) (*resolvers.Bootstrap, error) {
 	var own []netip.AddrPort
 	var err error
 	if len(entries) > 0 {
@@ -195,7 +201,7 @@ func newProfileBootstrap(entries []string, list []resolvers.Resolver, networkDNS
 			return nil, err
 		}
 	}
-	return resolvers.NewProfileBootstrap(own, list, networkDNS), nil
+	return resolvers.NewProfileBootstrap(own, list, networkDNS, control), nil
 }
 
 // Datapath is what BuildDatapath returns: the datapath of the run, socks or tun. For tun

@@ -228,6 +228,75 @@ func TestConnectTunProfileWithSocksFlag(t *testing.T) {
 	}
 }
 
+// The kill-switch is on by default; the flag wins over the profile, and the profile's
+// explicit false turns it off.
+func TestKillSwitchPolicy(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name string
+		prof *config.Profile
+		flag bool
+		on   bool
+		why  string
+	}{
+		{"default", &config.Profile{}, false, true, ""},
+		{"profile off", &config.Profile{KillSwitch: &off}, false, false, "kill_switch = false in the profile"},
+		{"flag off", &config.Profile{}, true, false, "-no-kill-switch"},
+		{"flag wins", &config.Profile{KillSwitch: &off}, true, false, "-no-kill-switch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			on, why := killSwitchPolicy(tc.prof, tc.flag)
+			if on != tc.on || why != tc.why {
+				t.Errorf("killSwitchPolicy = %v, %q; want %v, %q", on, why, tc.on, tc.why)
+			}
+		})
+	}
+}
+
+// -no-kill-switch and -allow-leak are accepted for socks and change nothing there: the
+// local listener opens, no table is touched.
+func TestConnectSocksAcceptsProtectionFlags(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	domain, err := dns.ParseName("t.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.StartTest(domain, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	p := &config.Profile{
+		Domain: domain.String(), Pubkey: strings.Repeat("01", 32),
+		Resolvers: []string{"udp:" + srv.Addr.String()}, Datapath: "socks",
+		Exit:  config.Exit{Type: "socks5"},
+		Socks: config.Socks{Listen: "127.0.0.1:0"},
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{DefaultProfile: "home", Profile: map[string]*config.Profile{"home": p}}); err != nil {
+		t.Fatal(err)
+	}
+
+	output := &connectOutput{lines: make(chan string, 100)}
+	e := &env{stdout: io.Discard, stderr: output, stdin: strings.NewReader("")}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, e, []string{"connect", "-v", "-no-kill-switch", "-allow-leak"}) }()
+
+	for opened := false; !opened; {
+		select {
+		case line := <-output.lines:
+			opened = strings.Contains(line, "[SOCKS] listening on ")
+		case <-ctx.Done():
+			t.Fatal("connect did not open its local listener")
+		}
+	}
+	cancel()
+	if code := waitConnectResult(t, done); code != exitOK {
+		t.Fatalf("connect exit = %d, want %d; output:\n%s", code, exitOK, output.String())
+	}
+}
+
 func TestConnectSSHDeferred(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	p := &config.Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: config.Exit{Type: "ssh"}}
@@ -410,11 +479,10 @@ func TestConnectWithInProcessServer(t *testing.T) {
 
 	// Create a profile that connects to the test server.
 	prof := &config.Profile{
-		Domain:     domain.String(),
-		Pubkey:     fmt.Sprintf("%x", ts.PubKey),
-		Resolvers:  []string{fmt.Sprintf("udp:%s", ts.Addr.String())},
-		Datapath:   "socks",
-		KillSwitch: false,
+		Domain:    domain.String(),
+		Pubkey:    fmt.Sprintf("%x", ts.PubKey),
+		Resolvers: []string{fmt.Sprintf("udp:%s", ts.Addr.String())},
+		Datapath:  "socks",
 		Exit: config.Exit{
 			Type: "socks5",
 		},

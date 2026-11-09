@@ -86,8 +86,8 @@ func TestTunRequiresLinux(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := w.Requires()
-	if !r.Admin || !r.Netguard || r.DNSGuard {
-		t.Errorf("Requires: %+v, want Admin and Netguard", r)
+	if !r.Admin || !r.Netguard || !r.DNSGuard {
+		t.Errorf("Requires: %+v, want Admin, Netguard and DNSGuard", r)
 	}
 	if _, err := os.Stat(tunDevice); err == nil {
 		if r.Unsupported != nil {

@@ -21,16 +21,24 @@ type Profiles struct {
 
 // Profile is one profile: the tunnel settings and the exit.
 type Profile struct {
-	Domain     string   `toml:"domain"`
-	Pubkey     string   `toml:"pubkey"`
-	Resolvers  []string `toml:"resolvers"`
-	Bootstrap  []string `toml:"bootstrap"`
-	UTLS       string   `toml:"utls"`
-	Datapath   string   `toml:"datapath"`
-	KillSwitch bool     `toml:"kill_switch"`
-	TunDNS     string   `toml:"tun_dns"`
-	Exit       Exit     `toml:"exit"`
-	Socks      Socks    `toml:"socks"`
+	Domain    string   `toml:"domain"`
+	Pubkey    string   `toml:"pubkey"`
+	Resolvers []string `toml:"resolvers"`
+	Bootstrap []string `toml:"bootstrap"`
+	UTLS      string   `toml:"utls"`
+	Datapath  string   `toml:"datapath"`
+	// KillSwitch is a pointer: a missing key means on; only an explicit false turns it
+	// off. Read it with KillSwitchOn.
+	KillSwitch *bool  `toml:"kill_switch,omitempty"`
+	TunDNS     string `toml:"tun_dns"`
+	Exit       Exit   `toml:"exit"`
+	Socks      Socks  `toml:"socks"`
+}
+
+// KillSwitchOn reports whether the kill-switch is on: a missing key means on, only an
+// explicit false turns it off.
+func (p *Profile) KillSwitchOn() bool {
+	return p.KillSwitch == nil || *p.KillSwitch
 }
 
 // Exit is the exit configuration: SOCKS5, HTTP CONNECT or SSH.

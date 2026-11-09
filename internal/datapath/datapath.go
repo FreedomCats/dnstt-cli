@@ -71,6 +71,14 @@ type Adapter interface {
 	AdapterID() uint64
 }
 
+// Guarded is an optional part of a datapath: an implementation that sets DNS leak
+// protection and expects its session (Requirements.DNSGuard). The caller opens the
+// session before the first Start and hands it over before Run; the datapath enables it
+// with the routes and disables it in Suspend.
+type Guarded interface {
+	SetDNSGuard(guard DNSGuard)
+}
+
 // Persistent is an optional part of a datapath: an implementation that lives the whole
 // dnstt-cli connect, not one session. For tun it is the adapter: there is no point in
 // recreating it on every reconnection, and Windows would also make "Network 2",

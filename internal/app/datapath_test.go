@@ -62,8 +62,8 @@ func TestBuildDatapathTun(t *testing.T) {
 	if _, ok := dp.(*datapath.Tun); !ok {
 		t.Fatalf("the tun profile gave %T, want *datapath.Tun", dp)
 	}
-	if req := dp.Requires(); !req.Admin || !req.Netguard {
-		t.Errorf("Requires = %+v, want Admin and Netguard", req)
+	if req := dp.Requires(); !req.Admin || !req.Netguard || !req.DNSGuard {
+		t.Errorf("Requires = %+v, want Admin, Netguard and DNSGuard", req)
 	}
 }
 

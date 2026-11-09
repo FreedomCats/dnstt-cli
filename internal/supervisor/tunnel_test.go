@@ -928,6 +928,171 @@ func TestDatapathAcrossSessions(t *testing.T) {
 	}
 }
 
+// noticeLog collects the user-facing lines of the supervisor.
+type noticeLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *noticeLog) notice(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *noticeLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.lines)
+}
+
+// A death and a Restart say where system traffic goes while the tunnel reconnects, then
+// that it is back; the first connection says nothing, and a failed Start prints no up line.
+func TestNoticeBetweenSessions(t *testing.T) {
+	log := &noticeLog{}
+	h := newHarness(t, []string{r1}, func(o *Options) { o.Notice = log.notice })
+	dp := &fakeDatapath{}
+	h.tun.SetDatapath(dp)
+	h.tun.SetKillSwitch(func() bool { return true })
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	if got := log.snapshot(); len(got) != 0 {
+		t.Fatalf("the first connection printed %q, want nothing", got)
+	}
+
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	down := "tunnel reconnecting — system traffic is blocked (kill-switch)"
+	up := "tunnel up again — system traffic goes through it"
+	if got := log.snapshot(); !slices.Equal(got, []string{down, up}) {
+		t.Errorf("lines after a death %q, want %q", got, []string{down, up})
+	}
+
+	h.tun.Restart(errors.New("network changed"))
+	h.waitState(StateConnected, 3)
+	if got := log.snapshot(); !slices.Equal(got, []string{down, up, down, up}) {
+		t.Errorf("lines after a restart %q, want a second down/up pair", got)
+	}
+}
+
+// A Start that fails prints no up line; the first successful Start after a down line does.
+func TestNoticeNoUpAfterFailedStart(t *testing.T) {
+	log := &noticeLog{}
+	h := newHarness(t, []string{r1}, func(o *Options) { o.Notice = log.notice })
+	dp := &fakeDatapath{}
+	h.tun.SetDatapath(dp)
+	h.tun.SetKillSwitch(func() bool { return true })
+	gate := make(chan struct{})
+	h.sleep = func(ctx context.Context, _ time.Duration) bool {
+		select {
+		case <-gate:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	dp.setStartErr(errors.New("adapter refused"))
+	h.session(0).die(client.ErrSilent)
+	gate <- struct{}{} // let the retry with the failing Start through
+	h.wait("the failed Start", func() bool { return len(dp.snapshot()) == 3 })
+	down := "tunnel reconnecting — system traffic is blocked (kill-switch)"
+	if got := log.snapshot(); !slices.Equal(got, []string{down}) {
+		t.Fatalf("lines after the failed Start %q, want only %q", got, down)
+	}
+
+	dp.setStartErr(nil)
+	gate <- struct{}{}
+	h.waitState(StateConnected, 2)
+	if got := log.snapshot(); len(got) != 2 || got[1] != "tunnel up again — system traffic goes through it" {
+		t.Errorf("lines after the recovered Start %q, want the up line", got)
+	}
+}
+
+// The stop prints no down line: the run is over, and there is nothing to reconnect to.
+func TestNoticeNoDownOnStop(t *testing.T) {
+	log := &noticeLog{}
+	h := newHarness(t, []string{r1}, func(o *Options) { o.Notice = log.notice })
+	h.tun.SetDatapath(&fakeDatapath{})
+	h.tun.SetKillSwitch(func() bool { return true })
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.snapshot(); len(got) != 0 {
+		t.Errorf("the stop printed %q, want nothing", got)
+	}
+}
+
+// Without the kill-switch the down line says the traffic goes past the tunnel.
+func TestNoticeKillSwitchOff(t *testing.T) {
+	log := &noticeLog{}
+	h := newHarness(t, []string{r1}, func(o *Options) { o.Notice = log.notice })
+	h.tun.SetDatapath(&fakeDatapath{})
+	h.tun.SetKillSwitch(func() bool { return false })
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	want := []string{
+		"tunnel reconnecting — system traffic goes past the tunnel (kill-switch off)",
+		"tunnel up again — system traffic goes through it",
+	}
+	if got := log.snapshot(); !slices.Equal(got, want) {
+		t.Errorf("lines after a death %q, want %q", got, want)
+	}
+}
+
+// Without a datapath (socks) no session is routed: a death and a Restart say nothing
+// about system traffic, and the first connection says nothing either.
+func TestNoticeWithoutDatapath(t *testing.T) {
+	log := &noticeLog{}
+	h := newHarness(t, []string{r1}, func(o *Options) { o.Notice = log.notice })
+	// Socks: no SetDatapath and no kill-switch at all.
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	h.tun.Restart(errors.New("network changed"))
+	h.waitState(StateConnected, 3)
+	if got := log.snapshot(); len(got) != 0 {
+		t.Errorf("socks printed user-facing lines about system traffic: %q", got)
+	}
+}
+
+// A nil Notice falls back to Logf.
+func TestNoticeFallsBackToLogf(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	h := newHarness(t, []string{r1}, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+		}
+	})
+	h.tun.SetDatapath(&fakeDatapath{})
+	h.tun.SetKillSwitch(func() bool { return true })
+	h.run(context.Background())
+
+	h.waitState(StateConnected, 1)
+	h.session(0).die(client.ErrSilent)
+	h.waitState(StateConnected, 2)
+	mu.Lock()
+	joined := strings.Join(lines, "\n")
+	mu.Unlock()
+	if !strings.Contains(joined, "tunnel reconnecting — system traffic is blocked (kill-switch)") {
+		t.Errorf("Logf did not get the down line: %q", joined)
+	}
+}
+
 // A failed Start closes the session, does not count as Connected, is reported with its
 // cause in Reconnecting and retried after the usual delay with the same resolver first;
 // the resolver is not penalized. With the fault cleared the session connects.

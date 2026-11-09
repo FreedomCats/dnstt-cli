@@ -79,6 +79,9 @@ type Options struct {
 	// Logf receives the lines of the supervisor: why an attempt failed, that the network
 	// changed. nil — silent.
 	Logf func(format string, args ...any)
+	// Notice receives the user-facing lines about system traffic between sessions; nil —
+	// Logf.
+	Notice func(format string, args ...any)
 
 	// HandshakeTimeout, DegradedAfter, DrainTimeout: 0 is the Default.
 	HandshakeTimeout time.Duration
@@ -148,16 +151,17 @@ type Tunnel struct {
 	// for twice is still one.
 	restart chan error
 
-	mu        sync.Mutex
-	state     State
-	resolver  string
-	datapath  Datapath      // set once before Run; nil — the datapath needs no session part
-	live      *live         // the session that is up; nil between sessions
-	ready     chan struct{} // closed when the next session is up
-	since     time.Time
-	handshake time.Duration
-	fatalErr  error              // the first fatal exit failure; protected by mu
-	cancelRun context.CancelFunc // interrupts dial, check, serve and backoff
+	mu         sync.Mutex
+	state      State
+	resolver   string
+	datapath   Datapath      // set once before Run; nil — the datapath needs no session part
+	killSwitch func() bool   // set once before Run; nil — no kill-switch
+	live       *live         // the session that is up; nil between sessions
+	ready      chan struct{} // closed when the next session is up
+	since      time.Time
+	handshake  time.Duration
+	fatalErr   error              // the first fatal exit failure; protected by mu
+	cancelRun  context.CancelFunc // interrupts dial, check, serve and backoff
 
 	stopping     chan struct{} // closed when the tunnel starts to stop
 	stoppingOnce sync.Once
@@ -215,6 +219,22 @@ func (t *Tunnel) sessionDatapath() Datapath {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.datapath
+}
+
+// SetKillSwitch gives Run the state of the kill-switch: true while system traffic is
+// closed between sessions. It is called once before Run, like SetDatapath: the protection
+// is opened after the tunnel is built.
+func (t *Tunnel) SetKillSwitch(killSwitch func() bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.killSwitch = killSwitch
+}
+
+// killSwitchOn is SetKillSwitch's value for Run, read under mu; false without one.
+func (t *Tunnel) killSwitchOn() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.killSwitch != nil && t.killSwitch()
 }
 
 // Restart ends the session or the attempt in progress with reason and dials again at once,
@@ -388,6 +408,8 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 	prev := -1                  // the resolver dialed last; Next goes on after it
 	var round []ResolverFailure // dials failed in a row since the last session
 	heard := false              // a handshake completed in this Run
+	routed := false             // a session has been routed into the datapath
+	bypassed := false           // the last Suspend left system traffic out of the tunnel
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -469,6 +491,11 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 				}
 				continue
 			}
+			if bypassed {
+				t.noticef("tunnel up again — system traffic goes through it")
+				bypassed = false
+			}
+			routed = true
 		}
 
 		round = nil
@@ -489,6 +516,10 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			return err
 		case end.restarted:
 			s.Close()
+			if routed {
+				t.noticeDown()
+				bypassed = true
+			}
 			t.set(StateReconnecting, name, end.reason, 0)
 			t.restarted(end.reason)
 			prev = -1
@@ -501,6 +532,10 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			}
 			pool.SessionEnded(i, end.lived)
 			t.mu.Unlock()
+			if routed {
+				t.noticeDown()
+				bypassed = true
+			}
 			var delay time.Duration
 			if end.lived >= resolvers.ShortSession {
 				t.backoff.reset()
@@ -800,6 +835,28 @@ func (t *Tunnel) set(to State, resolver string, cause error, delay time.Duration
 func (t *Tunnel) logf(format string, args ...any) {
 	if t.opts.Logf != nil {
 		t.opts.Logf(format, args...)
+	}
+}
+
+// noticef is a user-facing line: Options.Notice, or Logf when it is nil.
+func (t *Tunnel) noticef(format string, args ...any) {
+	f := t.opts.Notice
+	if f == nil {
+		f = t.opts.Logf
+	}
+	if f != nil {
+		f(format, args...)
+	}
+}
+
+// noticeDown says where system traffic goes while the tunnel is reconnecting. The caller
+// has a routed session: it sets bypassed, and the next successful Start prints the up
+// line.
+func (t *Tunnel) noticeDown() {
+	if t.killSwitchOn() {
+		t.noticef("tunnel reconnecting — system traffic is blocked (kill-switch)")
+	} else {
+		t.noticef("tunnel reconnecting — system traffic goes past the tunnel (kill-switch off)")
 	}
 }
 

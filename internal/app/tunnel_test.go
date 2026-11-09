@@ -15,7 +15,7 @@ import (
 
 func TestProfileBootstrapNetworkDNSError(t *testing.T) {
 	want := errors.New("network DNS unavailable")
-	b, err := newProfileBootstrap(nil, nil, func() ([]netip.Addr, error) { return nil, want })
+	b, err := newProfileBootstrap(nil, nil, func() ([]netip.Addr, error) { return nil, want }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestProfileBootstrapUsesUDPFallbackAfterNetworkDNSError(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := errors.New("network DNS unavailable")
-	b, err := newProfileBootstrap(nil, list, func() ([]netip.Addr, error) { return nil, want })
+	b, err := newProfileBootstrap(nil, list, func() ([]netip.Addr, error) { return nil, want }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestProfileBootstrapExplicitServersOverrideNetwork(t *testing.T) {
 	want := errors.New("must not read network DNS")
 	b, err := newProfileBootstrap([]string{server.String()}, nil, func() ([]netip.Addr, error) {
 		return nil, want
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

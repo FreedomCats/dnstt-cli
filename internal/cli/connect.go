@@ -37,6 +37,8 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	fs := newFlagSet(connectCommand())
 	verbose := fs.Bool("v", false, "verbose: show tunnel logs")
 	datapathFlag := fs.String("datapath", "", "datapath: socks or tun (default: the profile's, then socks)")
+	noKillSwitch := fs.Bool("no-kill-switch", false, "tun: let system traffic pass between sessions")
+	allowLeak := fs.Bool("allow-leak", false, "tun: connect even if DNS protection or the kill-switch cannot be set")
 	if err := parse(e, fs, args); err != nil {
 		return err
 	}
@@ -89,6 +91,11 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintf(e.stderr, format+"\n", args...)
 		}
 	}
+	// notice is the user-facing output: the leak protection lines go to stderr even
+	// without -v.
+	notice := func(format string, args ...any) {
+		fmt.Fprintf(e.stderr, format+"\n", args...)
+	}
 
 	// The guard exists before the tunnel, because the session config takes its Control at
 	// construction. It does not touch the system yet: the adapter index is the
@@ -106,6 +113,7 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		Profile:     &p,
 		ProfileName: profileName,
 		Logf:        logf,
+		Notice:      notice,
 		Control:     control,
 		OnTransition: func(tr supervisor.Transition) {
 			transitions <- tr
@@ -121,7 +129,15 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer dp.Close()
+	// The datapath goes first, then the protection: the guard session outlives the
+	// adapter and takes the rules away with it. The protection is opened later.
+	var prot *app.Protection
+	defer func() {
+		dp.Close()
+		if prot != nil {
+			prot.Close()
+		}
+	}()
 
 	// Refuse a datapath this system cannot run before the reservation and before any
 	// dial: a missing TUN device or a missing root is an error of the command, not a
@@ -170,6 +186,36 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 			return err
 		}
 		defer stop()
+	}
+
+	// DNS leak protection and the kill-switch: a datapath that takes all system traffic
+	// needs the session before Run, and a refusal is a clear error, not a loop of
+	// reconnections. The mark is set only here: SO_MARK needs the table's CAP_NET_ADMIN.
+	if requires.DNSGuard {
+		on, off := killSwitchPolicy(&p, *noKillSwitch)
+		prot, err = app.EnableProtection(app.ProtectionOptions{
+			KillSwitch: on,
+			AllowLeak:  *allowLeak,
+			Notice:     notice,
+		})
+		if err != nil {
+			return err
+		}
+		if off != "" {
+			notice("kill-switch is off (%s): system traffic goes past the tunnel while it is down", off)
+		}
+		if prot.Guard != nil {
+			guarded, ok := dp.(datapath.Guarded)
+			if !ok {
+				return fmt.Errorf("internal error: the %s datapath needs DNS protection but has no guard seam", kind)
+			}
+			if guard == nil {
+				return fmt.Errorf("internal error: the %s datapath needs DNS protection but the guard was not created", kind)
+			}
+			guarded.SetDNSGuard(prot.Guard)
+			guard.Mark = netguard.SocketMark
+		}
+		tunnel.Supervisor.SetKillSwitch(prot.Locked)
 	}
 
 	// Set up signal handling: first Ctrl+C stops cleanly, second does not wait.
@@ -229,6 +275,19 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 			dp.Close()
 			return <-errCh
 		}
+	}
+}
+
+// killSwitchPolicy decides whether the kill-switch is on for this run and, when it is
+// off, what turned it off: the flag first, then the profile's kill_switch.
+func killSwitchPolicy(prof *config.Profile, noKillSwitch bool) (on bool, off string) {
+	switch {
+	case noKillSwitch:
+		return false, "-no-kill-switch"
+	case !prof.KillSwitchOn():
+		return false, "kill_switch = false in the profile"
+	default:
+		return true, ""
 	}
 }
 

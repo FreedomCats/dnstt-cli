@@ -25,7 +25,7 @@ func TestProfilesRoundTrip(t *testing.T) {
 				Bootstrap:  []string{},
 				UTLS:       "",
 				Datapath:   "tun",
-				KillSwitch: true,
+				KillSwitch: boolPtr(true),
 				TunDNS:     "1.1.1.1",
 				Exit: Exit{
 					Type:        "socks5",
@@ -68,6 +68,105 @@ func TestProfilesRoundTrip(t *testing.T) {
 	}
 	if home.Exit.PasswordRef != "secretservice:0123456789abcdef" {
 		t.Errorf("exit.password_ref: got %q", home.Exit.PasswordRef)
+	}
+}
+
+// boolPtr returns a pointer to v, for the optional profile fields.
+func boolPtr(v bool) *bool { return &v }
+
+// A profile without kill_switch means on; an explicit false turns it off and an explicit
+// true keeps it on.
+func TestProfileKillSwitchDefault(t *testing.T) {
+	const head = `[profile.home]
+domain = "t.example.com"
+pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+`
+	for _, tc := range []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{"missing", "", true},
+		{"false", "kill_switch = false\n", false},
+		{"true", "kill_switch = true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(head+tc.key), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.Profile["home"].KillSwitchOn(); got != tc.want {
+				t.Errorf("KillSwitchOn = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// SaveProfilesTo leaves an unset kill_switch out of the file and writes an explicit value
+// as it is; a reload reads a missing key as on.
+func TestProfileKillSwitchSave(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   *bool
+		want bool
+		raw  string // what the file must say; "" — the key must be absent
+	}{
+		{"unset stays on", nil, true, ""},
+		{"false stays off", boolPtr(false), false, "kill_switch = false"},
+		{"true stays on", boolPtr(true), true, "kill_switch = true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			profiles := &Profiles{DefaultProfile: "home", Profile: map[string]*Profile{
+				"home": {
+					Domain:     "t.example.com",
+					Pubkey:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					KillSwitch: tc.in,
+					Exit:       Exit{Type: "socks5"},
+				},
+			}}
+			if err := SaveProfilesTo(path, profiles); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if has := strings.Contains(string(raw), "kill_switch"); has != (tc.raw != "") {
+				t.Errorf("the file names kill_switch = %v, want %v:\n%s", has, tc.raw != "", raw)
+			}
+			if tc.raw != "" && !strings.Contains(string(raw), tc.raw) {
+				t.Errorf("the file does not say %q:\n%s", tc.raw, raw)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.Profile["home"].KillSwitchOn(); got != tc.want {
+				t.Errorf("after reload KillSwitchOn = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// allow_leak is a command flag, not a profile key: a profile that names it is refused.
+func TestProfileAllowLeakUnknownKey(t *testing.T) {
+	raw := `[profile.home]
+domain = "t.example.com"
+pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+allow_leak = true
+`
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadProfilesFrom(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "allow_leak") {
+		t.Fatalf("load = %v, want an unknown-key error naming allow_leak", err)
 	}
 }
 
@@ -175,7 +274,7 @@ func TestProfilesEmptyResolversList(t *testing.T) {
 				Pubkey:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 				Resolvers:  []string{}, // Empty becomes ["network"] in validation
 				Datapath:   "tun",
-				KillSwitch: true,
+				KillSwitch: boolPtr(true),
 				Exit: Exit{
 					Type: "socks5",
 				},

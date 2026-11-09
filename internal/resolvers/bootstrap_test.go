@@ -417,7 +417,7 @@ func TestProfileBootstrapReadsNetworkDNSForEveryCacheMiss(t *testing.T) {
 	b := NewProfileBootstrap(nil, list, func() ([]netip.Addr, error) {
 		calls++
 		return addrs("198.51.100.53"), nil
-	})
+	}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, host := range []string{"doh.example", "dot.example"} {
@@ -427,6 +427,29 @@ func TestProfileBootstrapReadsNetworkDNSForEveryCacheMiss(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("network DNS read %d times for two cache misses, want 2", calls)
+	}
+}
+
+// NewProfileBootstrap passes control to its sockets: the profile constructor is what
+// buildTunnel uses, so bootstrap queries carry the mark like the core's own.
+func TestProfileBootstrapControl(t *testing.T) {
+	srv := startDNS(t)
+	var mu sync.Mutex
+	var networks []string
+	control := func(network, address string, c syscall.RawConn) error {
+		mu.Lock()
+		networks = append(networks, network)
+		mu.Unlock()
+		return nil
+	}
+	b := NewProfileBootstrap(ap(srv.addr.String()), nil, nil, control)
+	if _, err := b.LookupIP(lookupCtx(t), "a.example"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(networks, "udp4") {
+		t.Errorf("control saw %v, want the UDP query", networks)
 	}
 }
 

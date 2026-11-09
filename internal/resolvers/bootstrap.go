@@ -87,11 +87,14 @@ func profileBootstrapServers(own []netip.AddrPort, list []Resolver, networkDNS f
 }
 
 // NewProfileBootstrap builds a bootstrap resolver from the profile's own servers, or from
-// the network DNS and address-based UDP resolvers when the profile has none.
-func NewProfileBootstrap(own []netip.AddrPort, list []Resolver, networkDNS func() ([]netip.Addr, error)) *Bootstrap {
+// the network DNS and address-based UDP resolvers when the profile has none. control is put
+// on every socket (netguard): the bootstrap sockets are the core's sockets, and Control
+// binds and marks them like the rest (architecture.md §06, point 5); under a closed
+// kill-switch an unmarked query to the network's DNS would be dropped.
+func NewProfileBootstrap(own []netip.AddrPort, list []Resolver, networkDNS func() ([]netip.Addr, error), control func(network, address string, c syscall.RawConn) error) *Bootstrap {
 	return newBootstrapWithError(func() ([]netip.AddrPort, error) {
 		return profileBootstrapServers(own, list, networkDNS)
-	}, nil)
+	}, control)
 }
 
 // ParseBootstrap reads the bootstrap servers of a profile: plain DNS by address,

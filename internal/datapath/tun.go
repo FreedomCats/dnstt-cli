@@ -69,8 +69,9 @@ type Tun struct {
 	mu         sync.Mutex
 	closed     bool
 	adapter    *tunAdapter
-	configured bool // configure has run for adapter; a repeated Start does not reconfigure
-	up         bool // Start went through and Suspend or Close has not
+	guard      DNSGuard // DNS protection, set by SetDNSGuard before Start
+	configured bool     // configure has run for adapter; a repeated Start does not reconfigure
+	up         bool     // Start went through and Suspend or Close has not
 
 	// closeOnce and closeErr: the cleanup runs once, and every caller waits for it.
 	closeOnce sync.Once
@@ -129,10 +130,18 @@ func NewTun(opts TunOptions) (*Tun, error) {
 	return &Tun{opts: opts, openAdapter: openTunAdapter}, nil
 }
 
-// Requires: root and a netguard for the core's own sockets; the adapter takes all system
-// traffic. DNS protection is not here yet: it comes with the kill-switch child.
+// Requires: root, a netguard for the core's own sockets and the DNS protection session;
+// the adapter takes all system traffic.
 func (t *Tun) Requires() Requirements {
-	return Requirements{Unsupported: tunUnsupported(), Admin: true, Netguard: true}
+	return Requirements{Unsupported: tunUnsupported(), Admin: true, Netguard: true, DNSGuard: true}
+}
+
+// SetDNSGuard gives Start the DNS protection session (Guarded). It is called once before
+// Run, after the protection is opened: the adapter does not exist yet.
+func (t *Tun) SetDNSGuard(guard DNSGuard) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.guard = guard
 }
 
 // AdapterID is the interface index of the adapter (Adapter): 0 before the first Start,
@@ -159,9 +168,11 @@ func (t *Tun) Reserve() (release func(), err error) {
 
 // Start brings the adapter up for a session. The order is the contract: configure
 // (once per adapter) → the netstack's address and its DNS listener → the routes → the
-// system DNS. The listener binds to the address, so the address goes first; a system DNS
-// pointing into an adapter without a route would lose every query, so the routes go
-// before it.
+// DNS protection (IPv6 closed first, then port 53) → the system DNS. The listener binds
+// to the address, so the address goes first; a system DNS pointing into an adapter
+// without a route would lose every query, so the routes go before it. The protection goes
+// on after the routes and before the system DNS: its allow-list is the adapter's DNS
+// address, not tun_dns, which the netstack reaches through the exit.
 //
 // A failure does not close the adapter: it is a failure of the attempt, and the next
 // Start tries again. What was already set is undone as in Suspend, so no route or system
@@ -193,6 +204,15 @@ func (t *Tun) Start() error {
 	if err := adapter.addRoutes(); err != nil {
 		return errors.Join(fmt.Errorf("tun: routes: %w", err), t.suspendLocked())
 	}
+	if blocker, ok := t.guard.(IPv6Blocker); ok {
+		blocker.BlockIPv6(true)
+	}
+	if t.guard != nil {
+		if err := t.guard.Enable([]netip.Addr{tunAddress}); err != nil {
+			return errors.Join(fmt.Errorf("tun: DNS protection: %w", err), t.suspendLocked())
+		}
+		t.logf("[TUN] DNS protection: port 53 only to %v, loopback and the %s sockets", tunAddress, identity.Name)
+	}
 	if err := adapter.setDNS(); err != nil {
 		return errors.Join(fmt.Errorf("tun: system DNS: %w", err), t.suspendLocked())
 	}
@@ -214,8 +234,9 @@ func (t *Tun) Suspend() error {
 
 // suspendLocked is Suspend under t.mu, and the reverse of Start: the system DNS goes back
 // first, while the routes still lead into the adapter, so no query leaves through a
-// route that is about to be removed; then the routes; then the netstack's address, which
-// the DNS listener is bound to. Each step is attempted even if a previous one failed.
+// route that is about to be removed; then the DNS protection goes back to "closed" (or is
+// removed); then the routes; then the netstack's address, which the DNS listener is bound
+// to. Each step is attempted even if a previous one failed.
 func (t *Tun) suspendLocked() error {
 	if t.adapter == nil {
 		return nil
@@ -224,6 +245,11 @@ func (t *Tun) suspendLocked() error {
 	var errs []error
 	if err := t.adapter.revertDNS(); err != nil {
 		errs = append(errs, fmt.Errorf("tun: system DNS: %w", err))
+	}
+	if t.guard != nil {
+		if err := t.guard.Disable(); err != nil {
+			errs = append(errs, fmt.Errorf("tun: DNS protection: %w", err))
+		}
 	}
 	if err := t.adapter.removeRoutes(); err != nil {
 		errs = append(errs, fmt.Errorf("tun: routes: %w", err))
@@ -285,6 +311,7 @@ func (t *Tun) logf(format string, args ...any) {
 
 var (
 	_ Adapter    = (*Tun)(nil)
+	_ Guarded    = (*Tun)(nil)
 	_ Persistent = (*Tun)(nil)
 	_ Reserver   = (*Tun)(nil)
 )

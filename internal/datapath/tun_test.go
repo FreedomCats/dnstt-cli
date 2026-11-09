@@ -400,14 +400,116 @@ func TestNewTun(t *testing.T) {
 	}
 }
 
-// Requires: root and a netguard; DNSGuard does not come with this child.
+// fakeGuard is the DNS protection of the datapath in memory: it records into the same
+// call log as the adapter and can fail Enable or Disable.
+type fakeGuard struct {
+	f          *fakeAdapter
+	enableErr  error
+	disableErr error
+}
+
+func (g *fakeGuard) record(name string) error {
+	g.f.mu.Lock()
+	defer g.f.mu.Unlock()
+	g.f.calls = append(g.f.calls, name)
+	switch name {
+	case "Enable":
+		return g.enableErr
+	case "Disable":
+		return g.disableErr
+	}
+	return nil
+}
+
+func (g *fakeGuard) Enable([]netip.Addr) error { return g.record("Enable") }
+func (g *fakeGuard) Disable() error            { return g.record("Disable") }
+func (g *fakeGuard) BlockIPv6(bool)            { _ = g.record("BlockIPv6") }
+
+// The guard goes on after the routes and before the system DNS, IPv6 first; Suspend
+// reverses it before the routes go; Close disables the guard before the adapter is closed.
+func TestTunGuardLifecycle(t *testing.T) {
+	w, f, _ := newFakeTun(t)
+	g := &fakeGuard{f: f}
+	w.SetDNSGuard(g)
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	wantCalls(t, f, "configure", "addAddress", "addRoutes", "BlockIPv6", "Enable", "setDNS")
+	f.clearCalls()
+
+	if err := w.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	wantCalls(t, f, "revertDNS", "Disable", "removeRoutes", "removeAddress")
+	f.clearCalls()
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start after Suspend: %v", err)
+	}
+	wantCalls(t, f, "addAddress", "addRoutes", "BlockIPv6", "Enable", "setDNS")
+	f.clearCalls()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wantCalls(t, f, "revertDNS", "Disable", "removeRoutes", "removeAddress", "close")
+}
+
+// A failed Enable runs the suspend path: no address, routes or system DNS stay behind,
+// and the next Start retries the protection.
+func TestTunGuardEnableFailure(t *testing.T) {
+	w, f, _ := newFakeTun(t)
+	g := &fakeGuard{f: f, enableErr: errors.New("rules refused")}
+	w.SetDNSGuard(g)
+
+	if err := w.Start(); err == nil || !strings.Contains(err.Error(), "rules refused") {
+		t.Fatalf("Start = %v, want the guard's error", err)
+	}
+	wantCalls(t, f, "configure", "addAddress", "addRoutes", "BlockIPv6", "Enable",
+		"revertDNS", "Disable", "removeRoutes", "removeAddress")
+	f.clearCalls()
+
+	g.enableErr = nil
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start after the failure: %v", err)
+	}
+	wantCalls(t, f, "addAddress", "addRoutes", "BlockIPv6", "Enable", "setDNS")
+}
+
+// A Disable failure does not stop the rest of Suspend: its error is joined and the next
+// Start enables the protection again.
+func TestTunGuardDisableFailure(t *testing.T) {
+	w, f, _ := newFakeTun(t)
+	g := &fakeGuard{f: f, disableErr: errors.New("rules refused")}
+	w.SetDNSGuard(g)
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	f.clearCalls()
+
+	err := w.Suspend()
+	if err == nil || !strings.Contains(err.Error(), "rules refused") {
+		t.Fatalf("Suspend = %v, want the guard's error", err)
+	}
+	wantCalls(t, f, "revertDNS", "Disable", "removeRoutes", "removeAddress")
+
+	g.disableErr = nil
+	f.clearCalls()
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start after the failure: %v", err)
+	}
+	wantCalls(t, f, "addAddress", "addRoutes", "BlockIPv6", "Enable", "setDNS")
+}
+
+// Requires: root, a netguard and the DNS protection session.
 func TestTunRequires(t *testing.T) {
 	w, err := NewTun(TunOptions{Dialer: dialerFunc(nil), TunDNS: netip.MustParseAddr("203.0.113.53")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := w.Requires(); !r.Admin || !r.Netguard || r.DNSGuard {
-		t.Errorf("Requires: %+v, want Admin and Netguard", r)
+	if r := w.Requires(); !r.Admin || !r.Netguard || !r.DNSGuard {
+		t.Errorf("Requires: %+v, want Admin, Netguard and DNSGuard", r)
 	}
 }
 

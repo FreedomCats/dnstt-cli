@@ -168,7 +168,8 @@ func resolverChecks(list []resolvers.Resolver, own []string, networkDNS func() (
 			return []resolverCheck{{name: "bootstrap", err: err}}
 		}
 	}
-	bootstrap := resolvers.NewProfileBootstrap(ownServers, list, networkDNS)
+	// resolvers check runs outside a tunnel: its sockets need no Control.
+	bootstrap := resolvers.NewProfileBootstrap(ownServers, list, networkDNS, nil)
 
 	var checks []resolverCheck
 	for _, r := range list {

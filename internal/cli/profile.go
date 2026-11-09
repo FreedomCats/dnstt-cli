@@ -128,7 +128,7 @@ func runProfileShow(_ context.Context, e *env, args []string) error {
 		fmt.Fprintf(e.stdout, "  uTLS: %s\n", prof.UTLS)
 	}
 	fmt.Fprintf(e.stdout, "  Datapath: %s\n", prof.Datapath)
-	fmt.Fprintf(e.stdout, "  Kill Switch: %v\n", prof.KillSwitch)
+	fmt.Fprintf(e.stdout, "  Kill Switch: %v\n", prof.KillSwitchOn())
 	if prof.TunDNS != "" {
 		fmt.Fprintf(e.stdout, "  Tun DNS: %s\n", prof.TunDNS)
 	}
@@ -213,13 +213,15 @@ func runProfileAdd(_ context.Context, e *env, args []string) error {
 		return fmt.Errorf("profile %q already exists; use 'profile set' to edit it", name)
 	}
 
-	// Create a minimal profile.
+	// Create a minimal profile. The kill-switch default is named explicitly, so the
+	// profile keeps it on even if the default changes later.
+	killSwitch := true
 	prof := &config.Profile{
 		Domain:     "",
 		Pubkey:     "",
 		Resolvers:  []string{"network"},
 		Datapath:   "socks",
-		KillSwitch: true,
+		KillSwitch: &killSwitch,
 		Exit: config.Exit{
 			Type: "socks5",
 		},
