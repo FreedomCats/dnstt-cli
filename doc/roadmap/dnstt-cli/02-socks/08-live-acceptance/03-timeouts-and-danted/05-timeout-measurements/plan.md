@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 depends: [02-timeout-probes, 09-http-idle-control]
 ---
@@ -151,3 +151,39 @@ be plain Basic (another scheme or a portal login), in which case the control end
 the idle windows cannot qualify; that is reported, not worked around. A single failed run
 closes nothing: the affected series or window is kept, diagnosed and repeated explicitly.
 Neither loopback, HTTP success nor an assumed 30 s closes the policy gate.
+
+## Outcome
+
+The agent ran the accepted probes from this machine with the user's privately supplied values
+(the tunnel domain and public key, the HTTP CONNECT exit's Basic login, and DoH and DoT
+resolvers; the user supplied no UDP resolver, so a public one was used) and a temporary
+profile with a file-backed store in an ignored path. The profile and its secret were deleted
+after the runs; nothing of them entered the repository or the journal.
+
+- Ten fresh Noise dials per transport completed 10/10: medians 238 ms (DoH), 242 ms (DoT)
+  and 76 ms (UDP); maxima 1834 ms, 1560 ms and 132 ms.
+- One five-minute idle window per transport qualified: 31 progress intervals in 300 s, the
+  largest silence upper bounds 12.007 s (DoH), 11.007 s (DoT) and 11.008 s (UDP), with 1 s
+  polling, no censoring and no anomaly. Every window's pre-check and post-check
+  authenticated through the HTTP exit and returned the verified target body; the session
+  ended only at the requested length and its closure was confirmed. The server's progress
+  appeared about every ten seconds.
+- The raw records are the six `*-timeout-dial.log` and `*-timeout-idle.log` files of this run
+  in `doc/runs/logs/`; the console captures stay in `/tmp/opencode/live-run/evidence/`; the
+  summary, conditions and derivation are in `doc/local/plan-timeouts-and-danted.md`.
+
+After the numbers were presented, the user approved the derived policy: **keepalive 30 s**,
+2.5x the worst healthy-silence bound (12.0 s) with the server's ~10 s progress period, so smux
+checks every 10 s and silence is declared dead at about 30 s; **handshake 10 s**, 5.5x the
+worst observed fresh dial (1.83 s) for a cold bootstrap, replacing the preliminary 20 s and
+used by `resolvers check` as well; **degraded stays 25 s**, above the worst healthy silence and
+below the keepalive, so the status shows `reconnecting` about 5 s before the session dies.
+
+Rejected: a 20 s keepalive with a 15 s degraded threshold (only 8 s of margin over the
+measured bound) and 45 s/15 s (slower recovery with no measured need). The recovery cost in
+`socks` mode is the keepalive detection plus redial, backoff and the exit check; network
+tracking in `socks` remains an `architecture.md` §12 question, not part of this policy.
+
+No product code, default or profile field changed here: [Apply the measured timeout
+policy](../06-apply-timeouts/plan.md) carries the values, and [Recording the
+results](../../05-record-results/plan.md) the final documentation.
