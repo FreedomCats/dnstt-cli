@@ -105,11 +105,14 @@ without. The exit can send the greeting, the login and the `CONNECT` in one writ
 saves one or two round trips, but a server that reads one message per `recv` drops the rest
 and hangs, so it is turned on for a server known to take the batch. With a login the
 one-write greeting offers only username/password, so the password goes before the method is
-confirmed. A refused login, a refused target and a server that does not take the batch keep
-their usual errors, and a failed batch is not retried sequentially. It was measured against
-`danted` 1.4.4 built from source in a disposable synthetic environment; the result speaks
-about that service and does not cover other versions or deployments, TCP segmentation, or
-the server's `recv` calls.
+confirmed. An exit that chooses a method that was not offered, refuses the login or does
+not take the batch fails with an error that names `exit.one_write`; there is no automatic
+fallback and no second stream. A refused login stays a login error, a refused target a
+connect error, and an exit that does not answer as SOCKS5 keeps that classification. It was
+measured against `danted` 1.4.4 built from source with PAM and one login in a disposable
+loopback environment against a verified target; the result speaks about that service and
+those conditions only, not about the user's HTTP exit, other versions or deployments, TCP
+segmentation, or the server's `recv` calls.
 
 ### R4. The core's own sockets bypass the tunnel through one hook
 
