@@ -18,6 +18,8 @@ R2, R3, §§04 and 08, and the accepted
 [SOCKS5 tooling baseline](../../02-live-run-script/01-socks5-baseline/plan.md).
 The existing local README and tool remain the starting point. No product profile key,
 timeout default, authentication policy or replacement live-acceptance scope is chosen here.
+The control boundary was amended after this method was accepted because the user's real
+exit is an HTTP proxy; see [Control boundary amendment](#control-boundary-amendment).
 
 ## Steps
 
@@ -86,17 +88,42 @@ timeout default, authentication policy or replacement live-acceptance scope is c
   as a handshake, idle or `danted` measurement.
 - Missing SOCKS5/danted availability and incomplete/censored measurements keep their live
   gates open. Neither 30 s nor any new exit key/default is presented as approved.
-- The user-run instructions and decision handoff can be followed without giving an agent
-  access to actual configuration or secrets. Real values/captures are requested only in
-  the ignored private records; published results have an explicit sanitization boundary.
+- The run instructions and decision handoff can be followed without an agent reading the
+  user's actual configuration or secret store. Real values/captures are requested only in
+  the ignored private records and the temporary profile, and published results have an
+  explicit sanitization boundary; the [control boundary amendment](#control-boundary-amendment)
+  records the narrow executor change and leaves value handling to the parent stage.
 - Relative links resolve and `git diff --check` passes for the roadmap change. Both local
   documents are verified ignored; the tracked diff contains only authorized roadmap/docs.
   No code/test/build change or execution is needed for this documentation-only task.
 
+## Control boundary amendment
+
+After this method was accepted, the user's server turned out to have an HTTP proxy instead
+of an authenticated SOCKS5 exit. The user chose the pre/post usability control of the idle
+experiment accordingly: the selected real exit, checked by this tool's own probe for that
+exit type. For the user's HTTP exit that is the tool's HTTP/1.1 `CONNECT` exchange with
+Basic authentication, the same independent helper the `compare` command already uses; on an
+exit of another supported type the control is the corresponding independent exchange
+(authenticated RFC 1928 for `socks5`). The control is never the `compare` verdict, a product
+readiness check, product exit code or HTTP response timing.
+
+What does not change: the measured quantities and their start/end boundaries, the
+observation limits, the several-minute idle window, the conservative gap estimator, the
+evidence fields and the decision gates above. The window itself stays transport-level: it
+observes the Noise channel's receive progress and does not depend on the exit type; only the
+usability checks before and after it follow the exit. The `danted` experiment and its
+authenticated sequential control are unaffected.
+
+Who executes the real runs is not part of the measurement definition; the
+[parent stage](../plan.md) execution boundaries govern it, and the current branch records a
+narrow agent-run exception there. The value decision stays with the user in
+[Live timeout measurements](../05-timeout-measurements/plan.md).
+
 ## Risks and what is needed from the user
 
 No live access is needed to write the method. Actual resolver coverage and authenticated
-`danted` availability are unknown until the user-run children. Local probe implementation
+`danted` availability are unknown until the live children. Local probe implementation
 may refine sampling resolution and command syntax; it must preserve these measurement
 boundaries and must not silently turn an unresolved user decision into a default.
 

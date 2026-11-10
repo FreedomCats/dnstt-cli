@@ -13,7 +13,10 @@ SOCKS5 `danted` question answered. `E1`, `S8`; `architecture.md` R2, R3, §04, �
 This stage stays focused on the SOCKS5 exchange in `internal/exit/socks5.go` and the
 `danted` SOCKS5 service. Its probes use the SOCKS5 baseline child of the live-run tooling
 stage. HTTP CONNECT response timing and HTTP proxy behavior are outside this question and are
-handled by the HTTP exit and HTTP-comparison children.
+handled by the HTTP exit and HTTP-comparison children. Child 9 extends the same local
+tooling with an HTTP CONNECT usability control for the timeout measurements, because the
+user's real exit is an HTTP proxy; it is not HTTP response timing, it does not answer the
+`danted` question and it adds no product HTTP setting.
 
 The user's server turned out to have no `danted`: its exit is an HTTP proxy. On the user's
 decision the one-write question is answered against a synthetic `danted` in a disposable
@@ -23,7 +26,10 @@ turn their HTTP proxy into a SOCKS5 substitute.
 
 The dependency on `02-live-run-script` is retained as the preparation-stage gate before
 measurements; it no longer includes user-run acceptance. It does not make an HTTP proxy
-a valid substitute for `danted`, and no HTTP-specific setting is added here.
+a valid substitute for `danted`, and no HTTP-specific setting is added here. The timeout
+measurements are run by the agent from privately supplied values under the execution
+boundaries below; the user's HTTP exit serves only as their pre/post usability control
+(child 9), never as an answer to the `danted` question.
 
 - **Keepalive.** The client's smux keepalive timeout: how long a session may hear nothing
   from the server before it counts as dead. It stands at the upstream 2 min; R2 expects
@@ -38,9 +44,10 @@ a valid substitute for `danted`, and no HTTP-specific setting is added here.
   with a login. Measured on a synthetic service (child 8), because there is no real one on
   the user's server.
 
-Measuring the timeouts needs the user's server and resolvers. The `danted` question is
-measured locally with generated values instead, in a disposable environment of its own. The
-probes extend the tool of
+Measuring the timeouts needs the user's server, resolvers and values; the agent performs
+the runs under the execution boundaries below, and the temporary configuration is removed
+afterwards. The `danted` question is measured locally with generated values instead, in a
+disposable environment of its own. The probes extend the tool of
 [Live-run tooling](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
 
 Where the numbers live now: `client.Config.KeepAliveTimeout` (0 — the upstream
@@ -67,8 +74,9 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
    user's server has no authenticated SOCKS5 service, so the live test cannot be performed.
    Task; superseded by child 8.
 5. [Live timeout measurements and value selection](05-timeout-measurements/plan.md) — the
-   user measures DoH, DoT and UDP; derive candidate values and obtain the user's timeout
-   and recovery decision before product changes. Task; user-run evidence and documentation.
+   agent measures DoH, DoT and UDP from the user's privately supplied values; derive
+   candidate values and obtain the user's timeout and recovery decision before product
+   changes. Task; agent-run live evidence with the HTTP CONNECT control and documentation.
 6. [Apply the measured timeout policy](06-apply-timeouts/plan.md) — wire the selected
    keepalive into application sessions, share the handshake deadline with resolver checks,
    and test the degraded-state relationship. Task; product code and tests.
@@ -79,19 +87,26 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
    sequential/one-write exchange against a `danted` built from source, with a login, in a
    disposable local environment, and publish the version, conditions and scope. Task;
    agent-run synthetic evidence and documentation.
+9. [HTTP CONNECT control for the idle checks](09-http-idle-control/plan.md) — add the
+   selected real exit's HTTP/1.1 CONNECT usability control to `timeout-idle`, next to the
+   accepted SOCKS5 control, using the tool's own independent probe; the measured window
+   stays transport-level. Task; ignored tooling and synthetic tests.
 
-The method is accepted before either tool extension. Both extensions preserve the accepted
-SOCKS5/HTTP comparison instead of recreating it. The timeout measurements depend only on
-their probe, and applying their selected values does not depend on the `danted` result.
+The method is accepted before any tool extension. All extensions preserve the accepted
+SOCKS5/HTTP comparison instead of recreating it. The timeout measurements depend on their
+probes and on the HTTP control of child 9, while the measured window itself stays
+transport-level; applying their selected values does not depend on the `danted` result.
 The `danted` probe and the synthetic measurement do not require a product setting to exist
 first.
 
-Child 8 is numbered last because the earlier prefixes are taken: the dropped node keeps its
-number, and its directory is not renamed. Child 8 runs before child 7, which depends on its
-result. The `danted` measurement is no longer a user-run child, because there is no real
-service to run against; the synthetic environment replaces the missing prerequisite and
-brings its own user gate — permission for the container image and package fetch. No child may
-close a live gate using a local fixture or HTTP success: the synthetic result closes only the
+Child 8 is numbered last among the original children because the earlier prefixes are
+taken: the dropped node keeps its number, and its directory is not renamed. Child 8 runs
+before child 7, which depends on its result. Child 9 is the next free prefix: it extends the
+same ignored tool with the control the timeout measurements need, so child 5 depends on it.
+The `danted` measurement is no longer a user-run child, because there is no real service to
+run against; the synthetic environment replaces the missing prerequisite and brings its own
+user gate — permission for the container image and package fetch. No child may close a live
+gate using a local fixture or HTTP success: the synthetic result closes only the
 environment-scoped `danted` answer and says so, and the live SOCKS5 exit question stays with
 [Live runs](../04-live-runs/plan.md).
 
@@ -104,14 +119,27 @@ environment-scoped `danted` answer and says so, and the live SOCKS5 exit questio
   [Live runs](../04-live-runs/plan.md). Neither an HTTP service nor a failed setup proves
   that `danted` rejects one-write exchanges, and the synthetic result proves nothing about
   the user's exit.
-- The user performs all real runs from the local instructions. Agent implementation and
-  checks use synthetic temporary profiles/stores, generated identities and loopback only.
-  They must not read, stat or modify actual profile/config/secret data or metadata, dump
-  inherited environment, or call live services or resolvers. Changes to the user's service
-  or network require their own authorization. One narrow exception is authorized here: the
-  synthetic `danted` environment of child 8 is run by the agent because it is loopback-only
-  and generated-values-only, and fetching its source archive and its build dependencies is a
-  network fetch that needs the user's explicit permission in its own step.
+- The user performs every platform, browser, TUN, network-change and restart run from the
+  local instructions; [Live runs](../04-live-runs/plan.md) stays user-run. Agent
+  implementation and checks use synthetic temporary profiles/stores, generated identities
+  and loopback only. They must not read, stat or modify actual profile/config/secret data or
+  metadata, dump inherited environment, or call live services or resolvers. Changes to the
+  user's service or network require their own authorization. Two narrow exceptions are
+  authorized. First, the synthetic `danted` environment of child 8 is run by the agent
+  because it is loopback-only and generated-values-only, and fetching its source archive and
+  its build dependencies is a network fetch that needs the user's explicit permission in its
+  own step. Second, the live timeout measurements of child 5 are run by the agent with the
+  values the user supplies privately: the tunnel domain and server public key, the resolver
+  entries for the three transports, the HTTP CONNECT exit's Basic login and password, and an
+  allowed target with its expected body digest. The agent may read only the temporary
+  profile and file-backed store it creates in an ignored path, make only the resolver,
+  tunnel and target requests these commands need, and must not change the server, its
+  configuration, the network or any real profile or store. Real values and raw records stay
+  in ignored `doc/local/` or `doc/runs/`; the temporary configuration and stored secret are
+  deleted after the runs and the deletion is recorded. The user's permission for a
+  disposable SOCKS5/SSH exit container is not required for these runs and authorizes
+  nothing else. No other live run, browser, platform, restart or network-change check moves
+  to the agent.
 - The user authorized one narrow exception to the timeout probes' no-core-change boundary:
   the separate [context-aware initial DoT prerequisite](02-timeout-probes/03-dot-context/plan.md)
   repairs caller-context propagation and the uTLS handshake, with maintained vendor
@@ -164,16 +192,19 @@ relevant code children:
 - Check formatting and whitespace, the tool's explicit Linux/Windows vet, exclusion from
   `go list ./...`, Git ignore rules and privacy. Never force-add `doc/runs/` or `doc/local/`.
 
-Documentation-only and user-evidence children require link, consistency and privacy checks,
-not a new code build; the synthetic-environment child adds a disposable local run under the
-same documentation and privacy checks. The pre-existing signal-reader follow-up stays
-separate unless a concrete regression from this work is demonstrated.
+Documentation-only and live-evidence children require link, consistency, privacy and
+cleanup checks, not a new code build; the synthetic-environment child adds a disposable
+local run under the same documentation and privacy checks. The pre-existing signal-reader
+follow-up stays separate unless a concrete regression from this work is demonstrated.
 
 ## Done when
 
 - Over each transport — DoH, DoT, UDP — through the user's resolvers, the durations of a
   series of handshakes and the longest silence of the server in a healthy idle session of
-  several minutes are measured and kept in `doc/local/`.
+  several minutes are measured and kept in `doc/local/`; the pre-check and post-check of
+  each idle window passed through the tool's own control for the selected real exit (HTTP
+  CONNECT with Basic for the user's HTTP exit), outside the window and with no application
+  traffic inside it.
 - The chosen keepalive timeout and handshake timeout, each with the rule it was derived
   by, are set in the code: `connect` sets the keepalive timeout of its sessions, the
   handshake timeout replaces the preliminary 20 s, `resolvers check` uses the same
@@ -200,7 +231,10 @@ separate unless a concrete regression from this work is demonstrated.
   must be published that way: it is not a statement about every deployment, and it cannot be
   used as an answer for the user's HTTP exit. A positive one still needs the user's enduring
   key/default/behavior decision before any code.
-- Needed from the user: idle sessions of several minutes over each transport, and — for the
-  `danted` question — permission for the synthetic environment's container image and package
-  fetch. There is no `danted` on their server, and an HTTP proxy is not part of this
-  measurement.
+- Needed from the user: the private values — tunnel domain and server public key, the
+  intended resolver entries for all three transports, the HTTP exit's Basic login, an
+  allowed target with its expected body digest — and the timeout decision. The agent runs
+  the measurements; the user's time is not required. For the `danted` question, permission
+  for the synthetic environment's container image and package fetch remains as before.
+  There is no `danted` on their server; the HTTP exit is only the usability control for the
+  timeout runs and is not an answer to the `danted` question.
