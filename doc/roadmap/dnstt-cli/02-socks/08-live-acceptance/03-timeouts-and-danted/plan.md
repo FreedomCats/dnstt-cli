@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: 703fcad
 depends: [02-live-run-script]
 ---
@@ -239,3 +239,37 @@ follow-up stays separate unless a concrete regression from this work is demonstr
   for the synthetic environment's container image and package fetch remains as before.
   There is no `danted` on their server; the HTTP exit is only the usability control for the
   timeout runs and is not an answer to the `danted` question.
+
+## Outcome
+
+The stage is complete: the two preliminary numbers are measured on the user's server and set
+in the code, and the one-write question is answered, implemented and documented.
+
+- Measurement: agent-run with the user's privately supplied values, the HTTP CONNECT control
+  of the idle tool, and a temporary profile deleted afterwards. Ten fresh dials per transport
+  and one five-minute idle window per transport, all qualified: largest silence upper bounds
+  12.007/11.007/11.008 s over 300 s with 31 progress intervals, no censoring or anomaly; dial
+  medians 238/242/76 ms, maxima 1834/1560/132 ms. The user approved keepalive 30 s, handshake
+  10 s and degraded 25 s.
+- Code: `DefaultKeepAliveTimeout` 30 s, `DefaultHandshakeTimeout` 10 s and
+  `DefaultDegradedAfter` 25 s in `internal/supervisor/tunnel.go`; `internal/app/tunnel.go` sets
+  the keepalive on every session through `sessionConfig`; `resolvers check` shares the
+  handshake value. smux sends its keepalive every min(10 s, timeout/2) but checks the timeout
+  on its own period, so silence is declared dead one to two keepalive timeouts (30–60 s) after
+  the last data, and the full `socks` recovery adds redial and the exit check on top.
+- One-write: the synthetic source-built `danted` 1.4.4 accepted the whole batch; the positive
+  branch shipped as `exit.one_write` (off by default, socks5 only, sequential `Check`, a
+  key-named error with no fallback), with R3, §08, §10 and the example updated.
+- Children: `01-measurement-method`, `02-timeout-probes` (stage), `03-danted-probe`,
+  `05-timeout-measurements`, `06-apply-timeouts`, `07-danted-result` (stage),
+  `08-synthetic-danted`, `09-http-idle-control`; `04-danted-measurements` dropped for the
+  missing real service.
+- Not in this stage: `doc/architecture.md` R2/§04/§08/§13 still carry the preliminary values;
+  [Recording the results](../05-record-results/plan.md) updates them. The live SOCKS5 matrix,
+  the browser, platform, restart and network-change runs stay with
+  [Live runs](../04-live-runs/plan.md).
+- Validation: the stage acceptance ran the full matrix — race with isolated D-Bus and the four
+  stated exclusions, CI vet split on Linux and Windows, static build, Windows cross-build and
+  test compilation, the tool race suite, gofmt and whitespace — and found no defect. The
+  app-level keepalive behavioural test gap stays recorded as a risk in
+  [06-apply-timeouts](../06-apply-timeouts/plan.md).
