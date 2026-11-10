@@ -50,12 +50,13 @@ afterwards. The `danted` question is measured locally with generated values inst
 disposable environment of its own. The probes extend the tool of
 [Live-run tooling](../02-live-run-script/plan.md); the raw numbers stay in `doc/local/`.
 
-Where the numbers live now: `client.Config.KeepAliveTimeout` (0 — the upstream
-`idleTimeout`, `core/client/main.go`), never set by `internal/app/tunnel.go`; the smux
-interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
-`DefaultHandshakeTimeout` and `DefaultDegradedAfter` (25 s) in
-`internal/supervisor/tunnel.go`; a separate 20 s in `resolvers check`
-(`internal/cli/resolvers.go`). The exit's exchange is `exit.SOCKS5.exchange` in
+Where the numbers live after this stage: `DefaultKeepAliveTimeout` (30 s),
+`DefaultHandshakeTimeout` (10 s) and `DefaultDegradedAfter` (25 s) sit together in
+`internal/supervisor/tunnel.go`; `internal/app/tunnel.go` sets the keepalive on every session
+through `sessionConfig`, first dial and redial alike; `resolvers check`
+(`internal/cli/resolvers.go`) uses the shared handshake value. smux sends its keepalive every
+min(10 s, half the timeout) but checks the timeout on its own period, so silence is declared
+dead one to two keepalive timeouts after the last data (`core/client/session.go`). The exit's exchange is `exit.SOCKS5.exchange` in
 `internal/exit/socks5.go`; the exit keys of a profile are `type`, `user`, `password_ref`,
 `one_write` (`internal/config/profiles.go`).
 
