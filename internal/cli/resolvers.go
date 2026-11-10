@@ -13,6 +13,7 @@ import (
 	"github.com/FreedomCats/dnstt-cli/internal/app"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
+	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
 
 func resolversCommand() *command {
@@ -128,8 +129,9 @@ func runResolverChecks(ctx context.Context, e *env, profileName string, prof *co
 			LookupIP: check.lookup,
 		}
 
-		// Try the handshake with a timeout.
-		checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		// Try the handshake within the supervisor's handshake timeout: the policy value
+		// is shared, and a shorter caller context still bounds it.
+		checkCtx, cancel := context.WithTimeout(ctx, supervisor.DefaultHandshakeTimeout)
 		start := time.Now()
 		session, err := dial(checkCtx, cfg)
 		elapsed := time.Since(start)

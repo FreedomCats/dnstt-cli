@@ -18,11 +18,22 @@ import (
 
 const (
 	// DefaultHandshakeTimeout is how long a dial waits for the Noise handshake: the
-	// server's first answer through the resolver. Preliminary: to be measured against the
-	// live server (the live acceptance task of the SOCKS5 stage).
-	DefaultHandshakeTimeout = 20 * time.Second
+	// server's first answer through the resolver. 10 s is about 5.5x the slowest measured
+	// fresh handshake (~1.8 s), which leaves room for a cold bootstrap and cache misses;
+	// the supervisor's dials and "resolvers check" share this value.
+	DefaultHandshakeTimeout = 10 * time.Second
+	// DefaultKeepAliveTimeout is how long a session lives without data from the server
+	// (client.Config.KeepAliveTimeout). 30 s is 2.5x the worst measured healthy-silence
+	// bound (~12 s across the measured transports); the server's progress arrives about
+	// every 10 s. smux sends its keepalive every min(10 s, timeout/2) = 10 s, but checks
+	// the timeout on its own 30 s period, so silence is declared dead one to two periods
+	// (30–60 s) after the last data.
+	DefaultKeepAliveTimeout = 30 * time.Second
 	// DefaultDegradedAfter is how long a session may hear nothing from the server before
-	// it counts as degraded. The server sends a smux keepalive every 10 s.
+	// it counts as degraded. Retained: above the worst measured healthy silence (~12 s)
+	// and below the 30 s keepalive, so the status shows "degraded" before the session
+	// is declared dead — nominally 5 s before the earliest detection, less the poll step.
+	// Data from the server restores Connected; serve polls every fifth of it.
 	DefaultDegradedAfter = 25 * time.Second
 	// DefaultDrainTimeout is how long a stop waits for open connections (Options.Drain)
 	// before it closes the session under them. The second Ctrl+C cuts it short.
@@ -50,8 +61,9 @@ type Datapath interface {
 // Options are what a Tunnel is built from.
 type Options struct {
 	// Session is the configuration of every session: the tunnel, the uTLS distribution,
-	// the socket hook, the keepalive timeout, the log. Resolver and LookupIP are set
-	// per attempt from Resolvers and Bootstrap.
+	// the socket hook, the keepalive timeout (the caller sets it; there is no supervisor
+	// default), the log. Resolver and LookupIP are set per attempt from Resolvers and
+	// Bootstrap.
 	Session client.Config
 	// Resolvers is the resolver list with its health; required.
 	Resolvers *resolvers.Pool

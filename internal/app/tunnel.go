@@ -96,13 +96,7 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 	}
 
 	// Build the session config for the supervisor.
-	sessionCfg := client.Config{
-		Domain:  domain,
-		PubKey:  pubkey,
-		UTLS:    prof.UTLS,
-		Control: opts.Control,
-		Logf:    opts.Logf,
-	}
+	sessionCfg := sessionConfig(prof, domain, pubkey, opts)
 
 	// Build the exit dialer.
 	exitType := prof.Exit.Type
@@ -178,6 +172,20 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 		Supervisor: tun,
 		Exit:       exitDialer,
 	}, nil
+}
+
+// sessionConfig is the client.Config of every session of a connect. Its keepalive is the
+// approved policy timeout: the supervisor copies Options.Session on every dial, so the first
+// connection and every redial carry it. No profile key sets it.
+func sessionConfig(prof *config.Profile, domain dns.Name, pubkey []byte, opts TunnelOptions) client.Config {
+	return client.Config{
+		Domain:           domain,
+		PubKey:           pubkey,
+		UTLS:             prof.UTLS,
+		Control:          opts.Control,
+		Logf:             opts.Logf,
+		KeepAliveTimeout: supervisor.DefaultKeepAliveTimeout,
+	}
 }
 
 // httpExit stops the tunnel on the first complete authentication refusal. Other HTTP
