@@ -51,6 +51,10 @@ the user-run matrix and the record of its results.
    `kill -9` leftover in the system DNS is removed right after the TUN reservation and before
    the first session, so a run whose resolver is given by host name can start; P2 of the
    matrix found the gap. Task.
+5. [Dispatching the secret-service helper](05-secret-service-helper/plan.md) — the hidden
+   bridge that reads the invoking user's keyring under `sudo` is wired into the CLI; without
+   it a `secretservice:` reference cannot be read under `sudo`. P0 of the matrix found it.
+   Task.
 
 The runbook is prepared and reviewed before the user starts, so that a mistake in a command
 costs a line and not a wasted session. The matrix is then run in the user's time; the record

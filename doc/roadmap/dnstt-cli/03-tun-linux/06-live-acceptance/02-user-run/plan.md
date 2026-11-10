@@ -2,7 +2,7 @@
 kind: task
 status: blocked
 detailed: true
-depends: [01-runbook, 04-recover-system-dns]
+depends: [01-runbook, 04-recover-system-dns, 05-secret-service-helper]
 ---
 
 # The Linux matrix by the user
