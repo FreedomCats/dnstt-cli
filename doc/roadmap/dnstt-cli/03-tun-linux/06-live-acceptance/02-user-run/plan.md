@@ -2,17 +2,19 @@
 kind: task
 status: blocked
 detailed: true
-depends: [01-runbook]
+depends: [01-runbook, 04-recover-system-dns]
 ---
 
 # The Linux matrix by the user
 
 ## Task
 
-The user runs the acceptance matrix on the real Linux machine, following
-[the runbook](../01-runbook/plan.md). Agents do not execute any step: the runs change the
-machine's real network, use the user's server, profile, exit credentials and keyring, and need
-root. The lead keeps this node blocked while waiting for the user; a result is the filled
+The matrix is run on the real Linux machine, following [the runbook](../01-runbook/plan.md).
+On the user's request the agent runs the steps that need no browser and no physical network
+change — P0–P4, P6 and P7, which change the machine's routes and system DNS and need root —
+while P5, the browser/QUIC checks and the keyring path of a graphical session remain the
+user's. The agent uses only the real profile and the values the user supplied, and publishes
+no real value. The lead keeps this node blocked while waiting for the user; a result is the filled
 checklist and the evidence, not a code change.
 
 Input: `doc/local/runbook-tun-linux.md`. Output: the same file filled in (verdicts only) and the
@@ -93,4 +95,7 @@ working around it silently.
 Waiting for the user's live run of P0–P8 on the real Linux machine. The runbook is
 `doc/local/runbook-tun-linux.md`; the raw outputs go to `doc/runs/tun-matrix/`. No agent
 runs any step or reads the raw evidence; the user reports verdicts and the side of any
-failure, without real values. The node stays blocked until the user's results are in.
+failure, without real values. The node stays blocked until the user's results are in. It
+also waits for [the `kill -9` leftover fix](../04-recover-system-dns/plan.md): with the record
+still in the system DNS the next run cannot resolve a resolver's host name, so P2 cannot pass
+before that fix is in.

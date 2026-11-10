@@ -41,15 +41,22 @@ the user-run matrix and the record of its results.
 1. [Runbook and evidence form](01-runbook/plan.md) — the user-run checklist with placeholders,
    the exact commands, the expected observations and the private evidence layout. Task; docs
    only.
-2. [The Linux matrix by the user](02-user-run/plan.md) — the user runs P0–P8 on the real machine
-   and fills the checklist; agents do not run it. Task; user-run.
+2. [The Linux matrix](02-user-run/plan.md) — the agent runs the steps that need no browser or
+   physical network change (P0–P4, P6, P7), the user the rest (P5, the browser/QUIC checks,
+   the keyring path); the checklist is filled from the evidence. Task; mixed execution,
+   recorded in the node.
 3. [Recording the results](03-record/plan.md) — the sanitized leak matrix in `README.md`, the
    settled values in `architecture.md` and this stage's `Outcome`. Task.
+4. [Recovering the system DNS before the first dial](04-recover-system-dns/plan.md) — the
+   `kill -9` leftover in the system DNS is removed right after the TUN reservation and before
+   the first session, so a run whose resolver is given by host name can start; P2 of the
+   matrix found the gap. Task.
 
 The runbook is prepared and reviewed before the user starts, so that a mistake in a command
 costs a line and not a wasted session. The matrix is then run in the user's time; the record
 task writes only what the runs settled and keeps every value that identifies the user out of
-the repository.
+the repository. The matrix waits for the fix of the `kill -9` leftover (child 4): P2 cannot
+pass without it.
 
 ## Done when
 
