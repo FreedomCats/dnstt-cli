@@ -121,6 +121,8 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 			}
 		}
 		checkExit = func(ctx context.Context, open exit.OpenStream) error {
+			// The startup check stays sequential: it has no target and must work against
+			// any server, so it sends no CONNECT and never batches.
 			return (&exit.SOCKS5{Open: open, User: user, Password: password}).Check(ctx)
 		}
 	case "http":
@@ -167,7 +169,9 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 			fatal:  tun.FatalExit,
 		}
 	} else {
-		exitDialer = &exit.SOCKS5{Open: tun.OpenStream, User: user, Password: password}
+		// The profile's one_write reaches the datapath only: this dialer is its sole
+		// consumer, and the startup check above never sees it.
+		exitDialer = &exit.SOCKS5{Open: tun.OpenStream, User: user, Password: password, OneWrite: prof.Exit.OneWrite}
 	}
 
 	return &Tunnel{

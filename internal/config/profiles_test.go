@@ -154,6 +154,155 @@ func TestProfileKillSwitchSave(t *testing.T) {
 	}
 }
 
+// one_write keeps both values on a save and a reload, and the file always shows the key like
+// the other exit fields.
+func TestProfileOneWriteRoundTrip(t *testing.T) {
+	for _, oneWrite := range []bool{true, false} {
+		t.Run(fmt.Sprint(oneWrite), func(t *testing.T) {
+			p := &Profiles{DefaultProfile: "home", Profile: map[string]*Profile{
+				"home": {
+					Domain: "t.example.com",
+					Pubkey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					Exit:   Exit{Type: "socks5", OneWrite: oneWrite},
+				},
+			}}
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := SaveProfilesTo(path, p); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf("one_write = %v", oneWrite)
+			if !strings.Contains(string(raw), want) {
+				t.Fatalf("the file does not say %q:\n%s", want, raw)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ex := loaded.Profile["home"].Exit
+			if ex.OneWrite != oneWrite {
+				t.Errorf("one_write = %v, want %v", ex.OneWrite, oneWrite)
+			}
+			if !reflect.DeepEqual(ex, p.Profile["home"].Exit) {
+				t.Errorf("exit changed on round-trip: %+v", ex)
+			}
+		})
+	}
+}
+
+// A missing one_write is false; the key is known in the exit section, so a misspelt one is
+// refused there and not somewhere else.
+func TestProfileOneWriteKey(t *testing.T) {
+	const head = `[profile.home]
+domain = "t.example.com"
+pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+[profile.home.exit]
+type = "socks5"
+`
+	for _, tc := range []struct {
+		name string
+		key  string
+		want bool
+		fail string // a fragment of the expected error; "" — the load must succeed
+	}{
+		{name: "absent"},
+		{name: "true", key: "one_write = true\n", want: true},
+		{name: "false", key: "one_write = false\n"},
+		{name: "misspelt", key: "one_writ = true\n", fail: "unknown key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(head+tc.key), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if tc.fail != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.fail) ||
+					!strings.Contains(err.Error(), "one_writ") || !strings.Contains(err.Error(), "exit section") {
+					t.Fatalf("load = %v, want an unknown-key error naming one_writ in the exit section", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.Profile["home"].Exit.OneWrite; got != tc.want {
+				t.Fatalf("one_write = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// exit.one_write applies to SOCKS5 only; an empty type counts as socks5, and the false value
+// stays valid with every type, because saved profiles carry it in every exit section.
+func TestProfileOneWriteValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		exit Exit
+		want string // a fragment of the expected error; "" — the exit is valid
+	}{
+		{"socks5", Exit{Type: "socks5", OneWrite: true}, ""},
+		{"default type", Exit{OneWrite: true}, ""},
+		{"http true", Exit{Type: "http", User: "synthetic-user", OneWrite: true}, `exit.one_write applies to exit.type "socks5" only, not "http"`},
+		{"ssh true", Exit{Type: "ssh", OneWrite: true}, `exit.one_write applies to exit.type "socks5" only, not "ssh"`},
+		{"http false", Exit{Type: "http", User: "synthetic-user", PasswordRef: "file:synthetic-id"}, ""},
+		{"ssh false", Exit{Type: "ssh"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: tc.exit}
+			err := validateProfile("home", p)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				// A save keeps one_write = false in the exit section, so the reload must
+				// accept the file it just wrote.
+				path := filepath.Join(t.TempDir(), FileName)
+				if err := SaveProfilesTo(path, &Profiles{Profile: map[string]*Profile{"home": p}}); err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := LoadProfilesFrom(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := loaded.Profile["home"].Exit; got != tc.exit {
+					t.Fatalf("exit after reload = %+v, want %+v", got, tc.exit)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if err := SaveProfilesTo(filepath.Join(t.TempDir(), FileName), &Profiles{Profile: map[string]*Profile{"home": p}}); err == nil {
+				t.Fatal("saved a profile with one_write outside SOCKS5")
+			}
+			raw := fmt.Sprintf(`[profile.home]
+domain = %q
+pubkey = %q
+[profile.home.exit]
+type = %q
+user = "private-user"
+password_ref = "file:private-id"
+one_write = true
+`, p.Domain, p.Pubkey, tc.exit.Type)
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadProfilesFrom(path)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("invalid one_write profile load = %v, want %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatalf("validation exposed a credential value: %v", err)
+			}
+		})
+	}
+}
+
 // allow_leak is a command flag, not a profile key: a profile that names it is refused.
 func TestProfileAllowLeakUnknownKey(t *testing.T) {
 	raw := `[profile.home]

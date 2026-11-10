@@ -46,6 +46,10 @@ type Exit struct {
 	Type        string `toml:"type"`
 	User        string `toml:"user"`
 	PasswordRef string `toml:"password_ref"`
+	// OneWrite is the one-write SOCKS5 exchange: the greeting, the login and the CONNECT in
+	// one Write. It applies to exit.type "socks5" (an empty type counts) and to the
+	// datapath only, never to the startup check, which has no target. Off by default.
+	OneWrite bool `toml:"one_write"`
 }
 
 // Socks is the local SOCKS5 proxy configuration.
@@ -211,6 +215,11 @@ func validateProfile(name string, p *Profile) error {
 	if p.Exit.Type != "" && p.Exit.Type != "socks5" && p.Exit.Type != "http" && p.Exit.Type != "ssh" {
 		errs = append(errs, fmt.Errorf("%s: exit.type must be \"socks5\", \"http\" or \"ssh\"", prefix))
 	}
+	// exit.one_write applies to SOCKS5 only. The false value stays valid with every type:
+	// saved profiles carry one_write = false in every exit section.
+	if p.Exit.OneWrite && p.Exit.Type != "" && p.Exit.Type != "socks5" {
+		errs = append(errs, fmt.Errorf("%s: exit.one_write applies to exit.type \"socks5\" only, not %q", prefix, p.Exit.Type))
+	}
 	if p.Exit.Type == "http" {
 		if strings.Contains(p.Exit.User, ":") || strings.ContainsFunc(p.Exit.User, unicode.IsControl) {
 			errs = append(errs, fmt.Errorf("%s: HTTP exit: invalid user", prefix))
@@ -320,6 +329,7 @@ func checkProfileKeys(profileName string, data map[string]any) error {
 		"type":         true,
 		"user":         true,
 		"password_ref": true,
+		"one_write":    true,
 	}
 
 	knownSocksKeys := map[string]bool{

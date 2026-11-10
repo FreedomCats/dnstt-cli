@@ -286,6 +286,110 @@ func TestSOCKS5StartupCheckRemainsSessionLocal(t *testing.T) {
 	}
 }
 
+// The profile's one_write reaches the datapath dialer only: the startup check greets
+// sequentially and sends no CONNECT, while a connection through the local proxy takes the
+// one-write batch to the target over the generated tunnel.
+func TestSOCKS5OneWriteBinding(t *testing.T) {
+	fx := newAppSOCKSExit(t, "synthetic-user", "synthetic-password")
+	tun, dp, events, done, cancel := startAppTunnelWithExit(t, fx.addr,
+		config.Exit{Type: "socks5", OneWrite: true}, "synthetic-password")
+	if !tun.Exit.(*exit.SOCKS5).OneWrite {
+		t.Fatal("the datapath dialer lost exit.one_write")
+	}
+	waitAppState(t, events, supervisor.StateConnected)
+	// The check comes first and is the sequential one: both methods, a login, no CONNECT.
+	if got := appStreamLine(t, fx.streams); got != "check: sequential, no CONNECT" {
+		t.Fatalf("startup check stream: %s", got)
+	}
+	if got := fx.total.Load(); got != 1 {
+		t.Fatalf("streams = %d after the startup check, want 1", got)
+	}
+
+	client, err := proxyClient(dp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.DialContext(appContext(t), "tcp", "echo.example:7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appEcho(t, c)
+	c.Close()
+	if got := appStreamLine(t, fx.streams); got != "datapath: connected" {
+		t.Fatalf("datapath stream: %s", got)
+	}
+	if got := fx.total.Load(); got != 2 {
+		t.Fatalf("streams = %d after the datapath connection, want 2", got)
+	}
+	cancel()
+	if err := appRunResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An exit that reads one message per recv drops the batch: the error names exit.one_write,
+// the exit sees no second stream for it, the supervisor keeps running, and the same session
+// still reaches the target.
+func TestSOCKS5OneWriteDroppedBatch(t *testing.T) {
+	fx := newAppSOCKSExit(t, "synthetic-user", "synthetic-password")
+	fx.dropBatch.Store(1)
+	tun, dp, events, done, cancel := startAppTunnelWithExit(t, fx.addr,
+		config.Exit{Type: "socks5", OneWrite: true}, "synthetic-password")
+	waitAppState(t, events, supervisor.StateConnected)
+	if got := appStreamLine(t, fx.streams); got != "check: sequential, no CONNECT" {
+		t.Fatalf("startup check stream: %s", got)
+	}
+	if got := fx.total.Load(); got != 1 {
+		t.Fatalf("streams = %d after the startup check, want 1", got)
+	}
+
+	// The exit dialer directly: the datapath would turn the error into a SOCKS5 reply code.
+	_, err := tun.Exit.Dial(appContext(t), "echo.example:7")
+	if err == nil || !strings.Contains(err.Error(), "exit.one_write") {
+		t.Fatalf("dropped batch = %v, want an error naming exit.one_write", err)
+	}
+	if exit.IsLogin(err) {
+		t.Fatalf("dropped batch = %v is a login error", err)
+	}
+	if got := appStreamLine(t, fx.streams); got != "datapath: dropped the batch" {
+		t.Fatalf("dropped stream: %s", got)
+	}
+	// One stream for the failed batch: a sequential retry would have opened another one.
+	if got := fx.total.Load(); got != 2 {
+		t.Fatalf("streams = %d after the dropped batch, want 2", got)
+	}
+	if got := fx.batches.Load(); got != 1 {
+		t.Fatalf("one-write streams = %d, want 1: the batch was retried", got)
+	}
+	if state := tun.Supervisor.State(); state != supervisor.StateConnected && state != supervisor.StateDegraded {
+		t.Fatalf("supervisor state = %s after a dropped batch", state)
+	}
+
+	client, err := proxyClient(dp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.DialContext(appContext(t), "tcp", "echo.example:7")
+	if err != nil {
+		t.Fatalf("the session stopped serving after a dropped batch: %v", err)
+	}
+	appEcho(t, c)
+	c.Close()
+	if got := appStreamLine(t, fx.streams); got != "datapath: connected" {
+		t.Fatalf("later datapath stream: %s", got)
+	}
+	if got := fx.total.Load(); got != 3 {
+		t.Fatalf("streams = %d after the later connection, want 3", got)
+	}
+	if got := fx.batches.Load(); got != 2 {
+		t.Fatalf("one-write streams = %d after the later connection, want 2", got)
+	}
+	cancel()
+	if err := appRunResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPExitSignalsOnce(t *testing.T) {
 	want := &exit.LoginError{}
 	var signals atomic.Int32
@@ -545,6 +649,13 @@ func (c *appShutdownContext) Done() <-chan struct{} {
 // store passed to the builder, never the default config directory or the user's keyring.
 func startAppTunnel(t *testing.T, upstream, kind, password string) (*Tunnel, *datapath.Socks, <-chan supervisor.Transition, chan error, context.CancelFunc) {
 	t.Helper()
+	return startAppTunnelWithExit(t, upstream, config.Exit{Type: kind}, password)
+}
+
+// startAppTunnelWithExit is startAppTunnel for an exit that carries more than its type: a
+// test can set one_write together with the generated login.
+func startAppTunnelWithExit(t *testing.T, upstream string, ex config.Exit, password string) (*Tunnel, *datapath.Socks, <-chan supervisor.Transition, chan error, context.CancelFunc) {
+	t.Helper()
 	domain, err := dns.ParseName("t.example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -554,7 +665,7 @@ func startAppTunnel(t *testing.T, upstream, kind, password string) (*Tunnel, *da
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { srv.Close() })
-	p := testProfile(config.Exit{Type: kind})
+	p := testProfile(ex)
 	p.Pubkey = fmt.Sprintf("%x", srv.PubKey)
 	p.Resolvers = []string{"udp:" + srv.Addr.String()}
 	var lookup func(string) (string, error) = func(string) (string, error) {
@@ -647,6 +758,201 @@ func appEcho(t *testing.T, c net.Conn) {
 	if _, err := io.ReadFull(c, got); err != nil || !bytes.Equal(got, msg) {
 		t.Fatalf("echo = %q, %v", got, err)
 	}
+}
+
+// appStreamLine reads the next line of the exit fixture. A stream that never reaches the
+// fixture fails the test instead of blocking it until the package timeout.
+func appStreamLine(t *testing.T, lines <-chan string) string {
+	t.Helper()
+	select {
+	case line := <-lines:
+		return line
+	case <-time.After(20 * time.Second):
+		t.Fatal("the exit fixture saw no new stream")
+		return ""
+	}
+}
+
+// appSOCKSExit is the exit behind the tunneled streams: it speaks SOCKS5 with an RFC 1929
+// login like the measured danted and reports what every stream did. The startup check is
+// answered sequentially whatever the profile says, and a set dropBatch makes it read only
+// the greeting of that many one-write batches and close, as a server that reads one message
+// per recv does.
+type appSOCKSExit struct {
+	user, password string
+	addr           string
+	total          atomic.Int32 // every stream accepted, of any kind
+	dropBatch      atomic.Int32 // one-write batches to drop after the greeting
+	batches        atomic.Int32 // one-write streams accepted
+	streams        chan string  // one line per stream, as the streams finish
+}
+
+func newAppSOCKSExit(t *testing.T, user, password string) *appSOCKSExit {
+	t.Helper()
+	e := &appSOCKSExit{user: user, password: password, streams: make(chan string, 16)}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	e.addr = ln.Addr().String()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go e.serve(c)
+		}
+	}()
+	return e
+}
+
+func (e *appSOCKSExit) serve(c net.Conn) {
+	e.total.Add(1)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+
+	greeting, err := readAppSOCKS5Greeting(c)
+	if err != nil {
+		e.streams <- "closed before the greeting"
+		return
+	}
+	if !bytes.Equal(greeting, []byte{5, 1, 0x02}) {
+		e.serveCheck(c, greeting)
+		return
+	}
+
+	// The one-write batch: only 0x02 is offered, so the login and the CONNECT follow in it.
+	e.batches.Add(1)
+	if e.dropBatch.Load() > 0 {
+		// The server that reads one message per recv: the greeting is all it takes, and it
+		// closes before answering, so the rest of the batch is lost.
+		e.dropBatch.Add(-1)
+		e.streams <- "datapath: dropped the batch"
+		return
+	}
+	if _, err := c.Write([]byte{5, 0x02}); err != nil {
+		e.streams <- "datapath: " + err.Error()
+		return
+	}
+	if err := e.readLogin(c); err != nil {
+		e.streams <- "datapath: " + err.Error()
+		return
+	}
+	if _, err := c.Write([]byte{1, 0}); err != nil {
+		e.streams <- "datapath: " + err.Error()
+		return
+	}
+	target, err := readAppSOCKS5Connect(c)
+	if err != nil {
+		e.streams <- "datapath: " + err.Error()
+		return
+	}
+	if target != "echo.example:7" {
+		e.streams <- fmt.Sprintf("datapath: CONNECT %q", target)
+		return
+	}
+	if _, err := c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		e.streams <- "datapath: " + err.Error()
+		return
+	}
+	e.streams <- "datapath: connected"
+	io.Copy(c, c)
+}
+
+// serveCheck answers the sequential startup check: both methods offered, a login, and a
+// stream closed without a CONNECT.
+func (e *appSOCKSExit) serveCheck(c net.Conn, greeting []byte) {
+	if !bytes.Equal(greeting, []byte{5, 2, 0, 0x02}) {
+		e.streams <- fmt.Sprintf("unexpected greeting %v", greeting)
+		return
+	}
+	if _, err := c.Write([]byte{5, 0x02}); err != nil {
+		e.streams <- "check: " + err.Error()
+		return
+	}
+	if err := e.readLogin(c); err != nil {
+		e.streams <- "check: " + err.Error()
+		return
+	}
+	if _, err := c.Write([]byte{1, 0}); err != nil {
+		e.streams <- "check: " + err.Error()
+		return
+	}
+	var next [1]byte
+	_, err := c.Read(next[:])
+	switch {
+	case err == nil:
+		e.streams <- fmt.Sprintf("check: sent %v after the login, want no CONNECT", next)
+	case !errors.Is(err, io.EOF):
+		e.streams <- "check: " + err.Error()
+	default:
+		e.streams <- "check: sequential, no CONNECT"
+	}
+}
+
+// readAppSOCKS5Greeting reads a method selection message: the version, the number of
+// methods and the methods.
+func readAppSOCKS5Greeting(c net.Conn) ([]byte, error) {
+	var head [2]byte
+	if _, err := io.ReadFull(c, head[:]); err != nil {
+		return nil, err
+	}
+	methods := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(c, methods); err != nil {
+		return nil, err
+	}
+	return append(head[:], methods...), nil
+}
+
+// readLogin reads the RFC 1929 subnegotiation and checks it against the fixture's login;
+// the error names no value.
+func (e *appSOCKSExit) readLogin(c net.Conn) error {
+	var head [2]byte
+	if _, err := io.ReadFull(c, head[:]); err != nil {
+		return err
+	}
+	if head[0] != 1 {
+		return fmt.Errorf("login version %d", head[0])
+	}
+	user := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(c, user); err != nil {
+		return err
+	}
+	var size [1]byte
+	if _, err := io.ReadFull(c, size[:]); err != nil {
+		return err
+	}
+	password := make([]byte, int(size[0]))
+	if _, err := io.ReadFull(c, password); err != nil {
+		return err
+	}
+	if string(user) != e.user || string(password) != e.password {
+		return errors.New("wrong login")
+	}
+	return nil
+}
+
+// readAppSOCKS5Connect reads a CONNECT request and returns its target address.
+func readAppSOCKS5Connect(c net.Conn) (string, error) {
+	var head [4]byte
+	if _, err := io.ReadFull(c, head[:]); err != nil {
+		return "", err
+	}
+	if head != [4]byte{5, 1, 0, 3} {
+		return "", fmt.Errorf("CONNECT head %v", head)
+	}
+	var size [1]byte
+	if _, err := io.ReadFull(c, size[:]); err != nil {
+		return "", err
+	}
+	address := make([]byte, int(size[0])+2)
+	if _, err := io.ReadFull(c, address); err != nil {
+		return "", err
+	}
+	port := int(address[len(address)-2])<<8 | int(address[len(address)-1])
+	return fmt.Sprintf("%s:%d", address[:len(address)-2], port), nil
 }
 
 type appHTTPProxy struct {
