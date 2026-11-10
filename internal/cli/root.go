@@ -88,10 +88,23 @@ func lookup(name string) *command {
 
 // Main is the CLI entry point. It returns the exit code; cmd/dnstt-cli calls os.Exit.
 func Main(args []string, build Build) int {
+	return mainWith(args, build, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// mainWith is Main with the streams as parameters: tests need to see where each one goes
+// and must not replace the process-wide os.Stdin, os.Stdout and os.Stderr.
+//
+// The hidden keyring helper is dispatched first, before run: its exit code and streams
+// pass through unchanged, and it never reaches the command lookup or flag parsing.
+func mainWith(args []string, build Build, in io.Reader, out, errW io.Writer) int {
+	if code, ok := runSecretHelper(args, in, out, errW); ok {
+		return code
+	}
+
 	e := &env{
-		stdout: os.Stdout,
-		stderr: os.Stderr,
-		stdin:  os.Stdin,
+		stdout: out,
+		stderr: errW,
+		stdin:  in,
 		build:  build,
 	}
 	return run(context.Background(), e, args)

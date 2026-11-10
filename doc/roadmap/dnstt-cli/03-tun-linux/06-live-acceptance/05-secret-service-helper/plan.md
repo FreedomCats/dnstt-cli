@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -63,3 +63,51 @@ or the normal commands.
   the order.
 - The live keyring check needs the user's session bus and is done by lead after this task;
   nothing here needs the real keyring.
+
+## Outcome
+
+The hidden helper is now dispatched before the command list is consulted, so
+`dnstt-cli __secret-service` runs as the invoking user's keyring bridge again. Under `sudo`
+a `secretservice:` reference therefore has a reader, which is what P0 of the matrix needs.
+
+- `internal/cli/secrethelper_linux.go` holds `runSecretHelper(args, in, out, errW) (int,
+  bool)`: it handles only `args[0] == secretservice.HelperCommand`, otherwise it answers
+  `(0, false)`; the exit code and the three streams of `secretservice.RunHelper` come back
+  unchanged. Arguments after the first are not parsed: the helper's input is a JSON request
+  on stdin, and a request can never turn into an ordinary command.
+- `internal/cli/secrethelper_other.go` (`!linux`) is the `(0, false)` stub and does not
+  import `internal/secretservice`, which is Linux-only in its entirety; on other platforms
+  the name stays an ordinary unknown command.
+- `Main` was split into a thin wrapper and `mainWith(args, build, in, out, errW)`, which
+  takes the streams as parameters so tests see where each one goes without replacing the
+  process-wide `os` streams. `mainWith` calls the dispatch first, before `run`; the
+  exported signature and the behaviour of `run`, `report` and the usage text are unchanged.
+  The helper has no line in the command list or in any command's help, and an empty
+  argument list still prints the command list.
+- The helper protocol is untouched: `internal/secretservice` (helper, service and their
+  tests), `go.mod`, `go.sum` and `core/` were not changed, and no dependency, profile field
+  or user-visible interface was added.
+- Tests: `internal/cli/secrethelper_linux_test.go` proves the dispatch through `mainWith`
+  with a JSON request on the injected stdin (a valid JSON response with `unavailable` and
+  the helper's exit code 0), the malformed request (the helper's exit code 2, its `request`
+  message and no usage), the not-handled argument lists (nothing read or written) and the
+  invisibility in the command list. The malformed-request test pins the order: with the
+  dispatch moved after `run` it fails on `unknown command`. `secrethelper_other_test.go`
+  (`!linux`) pins that the name remains an unknown command through `mainWith`.
+- Checks: `gofmt` clean on `internal/cli` and `internal/secretservice`; `git diff --check`
+  clean; `go build ./...` and `CGO_ENABLED=0 go build ./...`; the focused race on
+  `internal/cli` and `internal/secretservice` with `DNSTT_CLI_TEST_DBUS=1` (the
+  `secretservice` tests bring up their own `dbus-daemon`); the project race with
+  `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and exactly the four external-network
+  netguard live tests excluded, so no live call was made; the CI vet split on Linux and for
+  Windows; the Windows cross-build and the compilation of the tests of every package that
+  builds there, `internal/cli` included; and an end-to-end run of a built binary against a
+  non-existent session bus (a valid request gives the JSON response, a broken one the
+  helper's code 2 and no usage). The tests never touch the real keyring: the session bus
+  address is pointed at a socket inside the test's temporary directory.
+
+What the handoff needs: the live matrix re-checks the keyring branch of P0 under `sudo`
+with a `secretservice:` reference; a file-backed reference keeps working either way, and
+the matrix node already depends on this task.
+
+No real problem was left incompletely fixed because of cost.
