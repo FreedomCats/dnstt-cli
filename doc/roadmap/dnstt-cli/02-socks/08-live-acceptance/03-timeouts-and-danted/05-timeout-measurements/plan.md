@@ -173,11 +173,14 @@ after the runs; nothing of them entered the repository or the journal.
   summary, conditions and derivation are in `doc/local/plan-timeouts-and-danted.md`.
 
 After the numbers were presented, the user approved the derived policy: **keepalive 30 s**,
-2.5x the worst healthy-silence bound (12.0 s) with the server's ~10 s progress period, so smux
-checks every 10 s and silence is declared dead at about 30 s; **handshake 10 s**, 5.5x the
-worst observed fresh dial (1.83 s) for a cold bootstrap, replacing the preliminary 20 s and
-used by `resolvers check` as well; **degraded stays 25 s**, above the worst healthy silence and
-below the keepalive, so the status shows `reconnecting` about 5 s before the session dies.
+2.5x the worst healthy-silence bound (12.0 s) with the server's ~10 s progress period. smux
+sends its keepalive every min(10 s, timeout/2) = 10 s but checks the timeout on its own 30 s
+period, so silence is declared dead one to two periods (30–60 s) after the last data; the
+full `socks`-mode recovery adds redial, backoff and the exit check on top of that. **Handshake
+10 s**, 5.5x the worst observed fresh dial (1.83 s) for a cold bootstrap, replacing the
+preliminary 20 s and used by `resolvers check` as well; **degraded stays 25 s**, above the
+worst healthy silence and below the keepalive, so the status shows `reconnecting` before the
+session is declared dead.
 
 Rejected: a 20 s keepalive with a 15 s degraded threshold (only 8 s of margin over the
 measured bound) and 45 s/15 s (slower recovery with no measured need). The recovery cost in
