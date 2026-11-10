@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: 938b7fc
 depends: [08-synthetic-danted]
 ---
@@ -113,3 +113,41 @@ all (the measured result would stay unused); a second flag for early credentials
   met. Published results and documentation are English and sanitized; raw evidence and
   the user's private server conditions remain outside Git. The later
   [results-recording task](../../05-record-results/plan.md) has a consistent R3 handoff.
+
+## Outcome
+
+The positive branch of the measured one-write result is implemented, tested and documented
+over `938b7fc..fa7d041`, and the user's enduring contract is what shipped:
+
+- `exit.one_write` is a bool in the exit section, absent or `false` by default, accepted for
+  `socks5` and for an empty type, rejected with `http` or `ssh`, and a misspelt key stays an
+  unknown exit key. The datapath SOCKS5 dialer is its only consumer; the startup readiness
+  check is not affected.
+- With it set, `Dial` sends the greeting, the RFC 1929 login and the `CONNECT` in one Write
+  and reads the three replies in order; with a login the greeting offers only `0x02`, so the
+  password goes before the method is confirmed; without one it offers only `0x00`. The
+  sequential path keeps its bytes, messages and errors, and `Check` stays sequential.
+- Failures keep `*LoginError`, `*ConnectError` and `ErrNotSOCKS5` identity; a batch the exit
+  does not take — including a silent exit at the deadline or a cancellation — names
+  `exit.one_write` and says there is no fallback, with no second stream and no sequential
+  retry. The acceptance review found and fixed the deadline case, which had lost the marker.
+- R3 states the setting, the early-credential price, the failure behavior and the measured
+  `danted` 1.4.4 source build in a disposable synthetic environment, with the limits: not
+  the user's HTTP exit, other versions or deployments, TCP segmentation, or the server's
+  `recv` calls. §08 says the readiness check stays sequential; §10 and
+  `dnstt-cli.example.toml` carry the reserved key.
+
+Children: `d4b63c3` (exchange), `4bcc30f` (key and binding), `1618e02` (documentation), plus
+the acceptance fixes `21786e4` (keep the marker on timeout and cancellation) and `fa7d041`
+(R3 states the failure and the scope). The whole range passed the stage's local matrix: the
+full race suite with isolated D-Bus and exactly the four external tests excluded, the CI vet
+split on Linux and Windows, a static build, the Windows cross-build and test compilation,
+`gofmt`, `git diff --check`, and the focused exit, app, supervisor and config packages,
+including a hundred-run repeat of the new silent-exit test. No dependency, live service,
+real profile or real value was involved. The tool race suite was not rerun because the
+ignored tooling was untouched in the range.
+
+Open and not part of this branch: the live SOCKS5 matrix and the user's HTTP exit stay with
+[Live runs](../../04-live-runs/plan.md), and the timeout values with
+[Live timeout measurements](../05-timeout-measurements/plan.md); no live gate is closed by
+this stage.
