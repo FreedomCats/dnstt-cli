@@ -98,11 +98,18 @@ not an error in every app.
 `UDP ASSOCIATE` is not carried: the relay needs UDP straight to the server, and the tunnel
 has only streams.
 
-The SOCKS5 messages go one at a time, each after the answer to the previous one: three
-round trips through DNS before the first byte of a connection with a login, two without.
-Sending them all in one write saves one or two, but a server that reads one message per
-`recv` drops the rest and hangs. It is turned on only if `danted` is seen to take it (live
-acceptance, stage 2 of the roadmap), and then as a setting of the exit.
+The SOCKS5 messages go one at a time by default, each after the answer to the previous one:
+three round trips through DNS before the first byte of a connection with a login, two
+without. The exit can send the greeting, the login and the `CONNECT` in one write instead:
+`one_write = true` in the exit section of the profile, off by default and `socks5` only. It
+saves one or two round trips, but a server that reads one message per `recv` drops the rest
+and hangs, so it is turned on for a server known to take the batch. With a login the
+one-write greeting offers only username/password, so the password goes before the method is
+confirmed. A refused login, a refused target and a server that does not take the batch keep
+their usual errors, and a failed batch is not retried sequentially. It was measured against
+`danted` 1.4.4 built from source in a disposable synthetic environment; the result speaks
+about that service and does not cover other versions or deployments, TCP segmentation, or
+the server's `recv` calls.
 
 ### R4. The core's own sockets bypass the tunnel through one hook
 
@@ -479,9 +486,10 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
   the next resolver at once; a full round without success — backoff `1·2^n` s up to 64 s,
   as in csqtt-cli.
 - **Connected** — a finished handshake and the exit readiness check. For `socks5`, every
-  new session logs in without a request (`exit.SOCKS5.Check`) before it counts. A SOCKS5
-  login refusal and an exit that does not answer as SOCKS5 are final (`Stopping`); an exit
-  that breaks the stream is a retry. For `http`, there is no hidden startup target or
+  new session logs in without a request (`exit.SOCKS5.Check`) before it counts; the optional
+  one-write exchange changes application connections only, so the readiness check stays
+  sequential and never sends a `CONNECT`. A SOCKS5 login refusal and an exit that does not
+  answer as SOCKS5 are final (`Stopping`); an exit that breaks the stream is a retry. For `http`, there is no hidden startup target or
   startup stream: `Connected` means tunnel readiness only. The first real application
   `CONNECT` performs Basic authentication. A final HTTP 407 is a fatal login refusal and
   moves the supervisor to `Stopping` without resolver penalty or redial. Other HTTP
@@ -550,6 +558,7 @@ tun_dns      = "1.1.1.1"                        # DNS behind the server for tun 
 type         = "socks5"                         # socks5 | http | ssh
 user         = "user"                           # empty — no authentication
 password_ref = "secretservice:…"                # the exit password lives in the secret store
+one_write    = false                            # socks5: greeting, login and CONNECT in one write
 
 [profile.home.socks]
 listen       = "127.0.0.1:1080"

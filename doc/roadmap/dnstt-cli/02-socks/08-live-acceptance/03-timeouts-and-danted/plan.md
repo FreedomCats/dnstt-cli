@@ -49,8 +49,8 @@ interval is the smaller of 10 s and half the timeout (`core/client/session.go`);
 `DefaultHandshakeTimeout` and `DefaultDegradedAfter` (25 s) in
 `internal/supervisor/tunnel.go`; a separate 20 s in `resolvers check`
 (`internal/cli/resolvers.go`). The exit's exchange is `exit.SOCKS5.exchange` in
-`internal/exit/socks5.go`; the exit keys of a profile are `type`, `user`, `password_ref`
-(`internal/config/profiles.go`).
+`internal/exit/socks5.go`; the exit keys of a profile are `type`, `user`, `password_ref`,
+`one_write` (`internal/config/profiles.go`).
 
 ## Children
 

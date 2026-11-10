@@ -23,6 +23,7 @@ tun_dns      = "1.1.1.1"                    # DNS behind the server for tun mode
 type         = "socks5"                     # socks5 | http | ssh (ssh is stage E5)
 user         = "user"                       # Exit username; empty — no authentication
 password_ref = "secretservice:0123456789abcdef"  # Reference to exit password in secret store
+one_write    = false                       # socks5 only: greeting, login and CONNECT in one write (off by default)
 
 [profile.home.socks]
 listen       = "127.0.0.1:1080"             # Local SOCKS5 proxy address

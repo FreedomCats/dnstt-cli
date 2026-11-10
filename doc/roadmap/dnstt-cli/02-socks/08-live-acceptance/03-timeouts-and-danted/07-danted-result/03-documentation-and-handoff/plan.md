@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 depends: [02-profile-key-and-binding]
 ---
 
@@ -62,3 +62,28 @@ What changes:
 - No code, test or configuration behavior changes; the documentation-only checks of the
   stage's [local validation](../../plan.md#local-validation-for-code-children) pass (links,
   consistency, privacy), with no build required.
+
+## Outcome
+
+R3 now describes the shipped setting instead of a future check: `one_write = true` in the
+exit section, off by default and `socks5` only, the one write of greeting, login and
+`CONNECT`, the early-credential price of the login mode, the unchanged error classes, no
+sequential retry, and the measured `danted` 1.4.4 built from source in a disposable
+synthetic environment with the explicit limits (no other versions or deployments, no TCP
+segmentation, no claim about the server's `recv` calls). The `socks5` readiness bullet in
+§08 says the readiness check stays sequential and sends no `CONNECT`, so the optional mode
+cannot hide a startup target. §10's example and `dnstt-cli.example.toml` carry
+`one_write = false` in `[profile.home.exit]` with the reserved value and a one-line meaning.
+The exit-key list in the parent stage
+([`03-timeouts-and-danted`](../../plan.md)) now names `one_write` as well.
+
+Handoff for [Recording the results](../../../05-record-results/plan.md): it uses R3's
+`socks5` bullet and the paragraph on the one-write setting and its measured scope, the
+`one_write` line of `[profile.home.exit]` in both the architecture example and
+`dnstt-cli.example.toml`, and the §08 readiness sentence. R2, the core documentation, the
+timeout values and the live SOCKS5 matrix stay with that node and with
+[Live runs](../../../04-live-runs/plan.md); nothing here settles them.
+
+Documentation-only: no code, test, configuration or default changed. Links and anchors
+resolve, the text is English, no work date, environment, address, real domain, key,
+resolver, login or profile name appears, and `git diff --check` passes.
