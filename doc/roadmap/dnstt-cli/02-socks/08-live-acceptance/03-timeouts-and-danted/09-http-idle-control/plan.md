@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 depends: [01-measurement-method, 02-timeout-probes]
 ---
@@ -190,3 +190,56 @@ synthetic validation set accept the result.
   defect.
 - Needed from the user: nothing for this local task. The values, the live runs and the
   timeout decision belong to the later child.
+
+## Outcome
+
+`timeout-idle` now performs its pre/post usability checks with the control that matches
+the profile's exit type: the accepted authenticated SOCKS5 exchange for `""`/`socks5`, and
+an HTTP/1.1 `CONNECT` with Basic credentials for `http`. `ssh` and unknown exit types are
+refused before the password lookup, resolver preparation and traffic, with one fixed
+diagnostic that does not echo the value. No flag, profile field, product code, dependency
+or command line changed.
+
+- The CONNECT exchange was split into one helper that speaks HTTP/1.1 on an
+  already-connected stream and returns the buffered connection. `dialHTTPConnect` keeps
+  its loopback guard, dial, deadline handling and cancellation, so `compare` and the
+  selftest keep their exact bytes and errors; no second parser and no product HTTP exit
+  code participate in the judgement.
+- The HTTP worker opens one stream of the same raw session under the existing verification
+  deadline and hands the buffered stream to the shared target verifier. The full-body
+  SHA-256, 2xx requirement, redirect refusal, TLS verification and header budget stay
+  shared, and the single ownership/interruption implementation in `verifyIdle` covers both
+  controls: joined worker, late stream collected, session torn down on limit or
+  cancellation.
+- A check passes only as an authenticated 2xx CONNECT with verified target data, a
+  confirmed closure and no remaining local streams. Outcomes are bounded categories —
+  `complete`, `proxy_auth_required`, `refused`, `invalid`, `timeout`, `canceled` — plus
+  `not_complete` for a transport failure of the exchange itself, for which the agreed
+  vocabulary has no separate category; such a result never passes. A result cannot
+  qualify on the other mode's fields, and the SOCKS5 path keeps the authenticated RFC 1928
+  requirement.
+- Setup and verification records carry the control mode and the HTTP authentication form;
+  numeric values, closure and local-stream fields keep their exact semantics, and the
+  Basic token, user, password and target URL/path/query stay filtered in private and
+  public output.
+- Synthetic tests cover Basic success before and after a window, 407 with the correct
+  encoding, wrong and missing credentials, a refused target, malformed, truncated,
+  informational-only and oversized replies, unreachable and ended streams, cancellation
+  and expiry at each phase, failed closure, remaining local streams and mode isolation.
+  The SOCKS5 tests, the process-level command test and the selftest stay green.
+- README, help and the private evidence form agree; the accepted method, `timeout-dial`,
+  `compare`, both exit fixtures and the selftest keep their behavior.
+
+The parent's local validation passed for the ignored tool: its race suite, Linux and
+Windows vet and builds, Windows test compilation, formatting and whitespace, the
+package-list exclusion, the project race suite with the exact four exclusions and the
+isolated D-Bus environment, and the CI vet split with the core exception. That validation
+needs a Go toolchain satisfying the `go` directive; an older binary fails under
+`GOTOOLCHAIN=local` before any build, so the cache's matching toolchain is used offline.
+
+Acceptance was synthetic only: no real profile, store, secret, resolver, exit or target was
+read or contacted. The live run, its values and the timeout decision remain with
+[Live timeout measurements](../05-timeout-measurements/plan.md). One older sentence in the
+tool README that asks to confirm an authenticated SOCKS5 exit before idle measurements was
+left as it is, because this task must not rewrite the accepted method; it concerns the
+`danted` prerequisite rather than the idle window.
