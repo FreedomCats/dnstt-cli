@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 ---
 
@@ -130,3 +130,49 @@ target and stays sequential, so the setting can never put a hidden `CONNECT` at 
   server may not take, and would break the startup contract.
 - The fixture must keep its sequential reading for the existing cases: a global change to
   its `serve` can silently change what the old tests prove.
+
+## Outcome
+
+The one-write exchange is in `internal/exit/socks5.go` as `SOCKS5.OneWrite`, off by default
+and applying to `Dial` only. With it set, one `Write` carries the greeting, the RFC 1929
+login when there is one, and the `CONNECT` request: with a login the greeting offers only
+`0x02`, so the password goes before the method is confirmed — the accepted price of the
+saved round trips; without a login it offers only `0x00`. The three replies are read in
+order with the same exact `io.ReadFull` sizes as the sequential path, with no buffered
+reader, so the first byte of the returned stream is still the target's. A short Write
+continues the remainder through `writeAll` as the same logical message.
+
+The sequential path keeps its bytes, messages and error classification. `Check` never
+enters the one-write path: it has no request, greets as before and sends no `CONNECT`. The
+package comment and the field now carry the measured `danted` 1.4.4 result, the synthetic
+environment scope, the off default and what a server that reads one message per `recv` does
+to the batch.
+
+Failure behavior follows the contract. A method that was not offered, a bad version at any
+stage and an unknown address type wrap `ErrNotSOCKS5`; `0xff` stays a `*LoginError`, the
+classification the sequential path gives it; a refused login stays `*LoginError`; a refused
+`CONNECT` stays exactly `*ConnectError{Address, Code}` and does not wait for the rest of the
+reply — the target, not the mode, is the problem, so it does not name the key. Every other
+error of the one-write exchange names `exit.one_write` and says there is no fallback; a
+failed batch opens no second stream and does not retry sequentially. The wrapping keeps
+`errors.Is`/`errors.As` identity, so the supervisor still stops on `IsLogin`.
+
+Tests prove the batch over `net.Pipe` by the fixture's first Read — one client Write of 26
+bytes with a login and 13 without — and cover coalesced and byte-by-byte replies with the
+target's first bytes intact, short writes and one-byte reads, method refusals, malformed
+replies at every stage, a dropped batch, cancellation, `Check` staying sequential, and a
+generated loopback tunnel with `t.example.com`, a login, a 50 KB echo, a closed port and a
+dropping upstream. The single-Write property is proved over the pipe; the tunnel test
+asserts behavior only. The fixture's forced-method mode answers and stops instead of
+reading on, so the tests never dial outside loopback.
+
+Not in this task, and taken by the next children: the `exit.one_write` profile key with its
+validation and its binding in `internal/app/tunnel.go`
+([profile key and binding](../02-profile-key-and-binding/plan.md)), and the documentation of
+the setting, its default and the measured scope in R3, §10 and the reserved example
+([documentation and handoff](../03-documentation-and-handoff/plan.md)). Until then the mode
+is reachable only from package code, not from a profile.
+
+`go build ./...`, the CI vet split, `go test -race -count=1 ./internal/exit`, the dependent
+packages and the stage's local validation matrix for code children pass; no dependency,
+network access or real value is involved.

@@ -14,11 +14,14 @@ import (
 
 // SOCKS5 client by RFC 1928 (CONNECT only) and RFC 1929 (username and password).
 //
-// The messages go one at a time, each after the answer to the previous one, although the
-// tunnel is slow and every round trip costs. Sending the greeting, the login and the
-// request in one write saves two round trips, but a server that reads one message per recv
-// drops the rest and hangs. Whether danted takes it is to be seen live (the live
-// acceptance task of the SOCKS5 stage).
+// By default the messages go one at a time, each after the answer to the previous one: the
+// tunnel is slow and every round trip costs, but any server takes the sequential exchange.
+// The one-write mode (SOCKS5.OneWrite) sends the greeting, the login and the request in one
+// Write. danted 1.4.4 was measured to take that batch in one stream Write; the result is
+// environment-scoped, from a one-off synthetic setup, and says nothing about other versions
+// or deployments or about a real exit. The mode is off by default: a server that reads one
+// message per recv takes the greeting and loses the rest of the batch, and the exchange
+// hangs until its deadline.
 
 const socksVersion = 5
 
@@ -92,6 +95,15 @@ type SOCKS5 struct {
 	// authentication "none".
 	User     string
 	Password string
+	// OneWrite sends the greeting, the RFC 1929 login (when there is one) and the CONNECT
+	// request in one Write and reads the three replies in order from the same stream; it
+	// applies to Dial only, never to Check. With a login the greeting offers only 0x02, so
+	// the password goes before the method is confirmed: the accepted price of the saved
+	// round trips. Off by default, because a server that reads one message per recv loses
+	// the rest of the batch and the exchange hangs until its deadline. Measured on danted
+	// 1.4.4 in a one-off synthetic environment; it says nothing about other versions or
+	// deployments, or about a real exit.
+	OneWrite bool
 }
 
 var _ Dialer = (*SOCKS5)(nil)
@@ -167,23 +179,19 @@ func (s *SOCKS5) checkLogin() error {
 }
 
 func (s *SOCKS5) exchange(conn net.Conn, address string, req []byte) error {
+	if req != nil && s.OneWrite {
+		return s.exchangeOneWrite(conn, address, req)
+	}
 	// The greeting offers "none" in any case: an exit that lets anyone in picks it, and
 	// the password is not sent at all.
-	greeting := []byte{socksVersion, 1, methodNone}
-	if s.User != "" {
-		greeting = []byte{socksVersion, 2, methodNone, methodPassword}
-	}
-	if _, err := conn.Write(greeting); err != nil {
+	if _, err := conn.Write(s.greeting(false)); err != nil {
 		return streamError(err)
 	}
-	var choice [2]byte
-	if _, err := io.ReadFull(conn, choice[:]); err != nil {
-		return streamError(err)
+	method, err := readMethod(conn)
+	if err != nil {
+		return err
 	}
-	if choice[0] != socksVersion {
-		return fmt.Errorf("%w (version %d in the answer to the greeting)", ErrNotSOCKS5, choice[0])
-	}
-	switch choice[1] {
+	switch method {
 	case methodNone:
 	case methodPassword:
 		if s.User == "" {
@@ -199,7 +207,7 @@ func (s *SOCKS5) exchange(conn net.Conn, address string, req []byte) error {
 		return &LoginError{"the SOCKS5 exit accepts neither a login nor connections without one"}
 	default:
 		return fmt.Errorf("%w (it chose authentication method %#02x, which was not offered)",
-			ErrNotSOCKS5, choice[1])
+			ErrNotSOCKS5, method)
 	}
 	if req == nil {
 		return nil
@@ -208,22 +216,104 @@ func (s *SOCKS5) exchange(conn net.Conn, address string, req []byte) error {
 	if _, err := conn.Write(req); err != nil {
 		return streamError(err)
 	}
+	code, err := readConnectReply(conn)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return &ConnectError{Address: address, Code: code}
+	}
+	return nil
+}
+
+// exchangeOneWrite is Dial with OneWrite: the greeting, the login (when there is one) and
+// the request go in one Write, and the replies are read in order from the same stream. A
+// failed batch is final: there is no second stream and no sequential retry.
+func (s *SOCKS5) exchangeOneWrite(conn net.Conn, address string, req []byte) error {
+	batch := s.greeting(true)
+	if s.User != "" {
+		batch = append(batch, s.loginMessage()...)
+	}
+	batch = append(batch, req...)
+	if err := writeAll(conn, batch); err != nil {
+		return oneWriteError(streamError(err))
+	}
+	method, err := readMethod(conn)
+	if err != nil {
+		return oneWriteError(err)
+	}
+	want := byte(methodNone)
+	if s.User != "" {
+		want = methodPassword
+	}
+	switch {
+	case method == want:
+	case method == methodNoAcceptable:
+		if s.User == "" {
+			return oneWriteError(&LoginError{"the SOCKS5 exit requires a login, and the profile has none"})
+		}
+		return oneWriteError(&LoginError{"the SOCKS5 exit accepts neither a login nor connections without one"})
+	default:
+		return oneWriteError(fmt.Errorf("%w (it chose authentication method %#02x, which was not offered)",
+			ErrNotSOCKS5, method))
+	}
+	if want == methodPassword {
+		if err := loginStatus(conn); err != nil {
+			return oneWriteError(err)
+		}
+	}
+	code, err := readConnectReply(conn)
+	if err != nil {
+		return oneWriteError(err)
+	}
+	if code != 0 {
+		// The target, not the mode: the error is the same as in the sequential path.
+		return &ConnectError{Address: address, Code: code}
+	}
+	return nil
+}
+
+// greeting is the method selection message. With OneWrite and a login it offers only the
+// password method, so the login may follow in the same Write; the sequential greeting
+// offers "none" as well, and an exit that lets anyone in is not sent the password.
+func (s *SOCKS5) greeting(oneWrite bool) []byte {
+	if s.User == "" {
+		return []byte{socksVersion, 1, methodNone}
+	}
+	if oneWrite {
+		return []byte{socksVersion, 1, methodPassword}
+	}
+	return []byte{socksVersion, 2, methodNone, methodPassword}
+}
+
+// readMethod reads the answer to the greeting off the stream.
+func readMethod(conn net.Conn) (byte, error) {
+	var choice [2]byte
+	if _, err := io.ReadFull(conn, choice[:]); err != nil {
+		return 0, streamError(err)
+	}
+	if choice[0] != socksVersion {
+		return 0, fmt.Errorf("%w (version %d in the answer to the greeting)", ErrNotSOCKS5, choice[0])
+	}
+	return choice[1], nil
+}
+
+// readConnectReply reads the reply to CONNECT off to the end of the bound address, so that
+// the first byte of the stream that follows is the target's. A refusal is returned as its
+// code with the rest of the reply unread: some servers cut it short before closing.
+func readConnectReply(conn net.Conn) (code byte, err error) {
 	var head [4]byte
 	if _, err := io.ReadFull(conn, head[:2]); err != nil {
-		return streamError(err)
+		return 0, streamError(err)
 	}
 	if head[0] != socksVersion {
-		return fmt.Errorf("%w (version %d in the reply to CONNECT)", ErrNotSOCKS5, head[0])
+		return 0, fmt.Errorf("%w (version %d in the reply to CONNECT)", ErrNotSOCKS5, head[0])
 	}
 	if head[1] != 0 {
-		// The stream is not used after a refusal: the rest of the reply, which some
-		// servers cut short before closing, is not waited for.
-		return &ConnectError{Address: address, Code: head[1]}
+		return head[1], nil
 	}
-	// The bound address is read off to the end, so the first byte of the stream that
-	// follows is the target's.
 	if _, err := io.ReadFull(conn, head[2:]); err != nil {
-		return streamError(err)
+		return 0, streamError(err)
 	}
 	var n int
 	switch head[3] {
@@ -234,28 +324,38 @@ func (s *SOCKS5) exchange(conn net.Conn, address string, req []byte) error {
 	case atypDomain:
 		var l [1]byte
 		if _, err := io.ReadFull(conn, l[:]); err != nil {
-			return streamError(err)
+			return 0, streamError(err)
 		}
 		n = int(l[0])
 	default:
-		return fmt.Errorf("%w (address type %#02x in the reply to CONNECT)", ErrNotSOCKS5, head[3])
+		return 0, fmt.Errorf("%w (address type %#02x in the reply to CONNECT)", ErrNotSOCKS5, head[3])
 	}
 	if _, err := io.ReadFull(conn, make([]byte, n+2)); err != nil {
-		return streamError(err)
+		return 0, streamError(err)
 	}
-	return nil
+	return 0, nil
 }
 
 // login is the RFC 1929 subnegotiation.
 func (s *SOCKS5) login(conn net.Conn) error {
+	if _, err := conn.Write(s.loginMessage()); err != nil {
+		return streamError(err)
+	}
+	return loginStatus(conn)
+}
+
+// loginMessage is the RFC 1929 subnegotiation.
+func (s *SOCKS5) loginMessage() []byte {
 	b := make([]byte, 0, 3+len(s.User)+len(s.Password))
 	b = append(b, passwordVersion, byte(len(s.User)))
 	b = append(b, s.User...)
 	b = append(b, byte(len(s.Password)))
 	b = append(b, s.Password...)
-	if _, err := conn.Write(b); err != nil {
-		return streamError(err)
-	}
+	return b
+}
+
+// loginStatus reads the answer to the RFC 1929 subnegotiation.
+func loginStatus(conn net.Conn) error {
 	var status [2]byte
 	if _, err := io.ReadFull(conn, status[:]); err != nil {
 		// A stream closed instead of an answer is no proof of a refusal: the session may
@@ -269,6 +369,28 @@ func (s *SOCKS5) login(conn net.Conn) error {
 		return &LoginError{"the SOCKS5 exit refused the login: wrong user name or password"}
 	}
 	return nil
+}
+
+// writeAll writes b in one Write; after a short Write it writes the rest, so the batch
+// stays one logical message.
+func writeAll(conn net.Conn, b []byte) error {
+	for len(b) > 0 {
+		n, err := conn.Write(b)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
+	}
+	return nil
+}
+
+// oneWriteError marks a failure of the one-write exchange: the batch is not taken, and
+// there is no fallback to the sequential path.
+func oneWriteError(err error) error {
+	return fmt.Errorf("%w (exit.one_write: no fallback)", err)
 }
 
 // streamError is a failure of the stream in the middle of the exchange. An exit that

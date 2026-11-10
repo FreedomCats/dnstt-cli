@@ -1,8 +1,10 @@
 package exit
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -25,8 +27,29 @@ type socksServer struct {
 	// first is sent in one write with the reply, as the first bytes of the target.
 	first []byte
 
-	mu   sync.Mutex
-	seen []string // what each connection did: "login user", "connect domain host:port"…
+	// logGreeting logs the methods of every greeting as "greeting 00 02"; off by default,
+	// because the older cases compare the log exactly.
+	logGreeting bool
+	// chooseSet makes the server answer choose regardless of the methods offered; a method
+	// the client did not offer ends the exchange with that answer.
+	chooseSet bool
+	choose    byte
+	// singleRead reads one message per Read: the first Read takes exactly one client
+	// Write, which is how the tests see the whole one-write batch. The rest is read off
+	// the connection, so a sequential exchange still works.
+	singleRead bool
+	// dropBatch closes the stream after the first message, as a server that reads one
+	// message per recv and hangs up.
+	dropBatch bool
+	// coalesce holds the method choice and the login status and writes them together with
+	// the CONNECT reply, with first after them.
+	coalesce bool
+	// dribble writes every reply byte in its own Write.
+	dribble bool
+
+	mu    sync.Mutex
+	seen  []string // what each connection did: "login user", "connect domain host:port"…
+	reads []int    // sizes of the first reads in singleRead mode
 }
 
 func (s *socksServer) log(event string) {
@@ -39,6 +62,19 @@ func (s *socksServer) events() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.seen...)
+}
+
+// readSizes are the sizes of the first reads in singleRead mode, one per connection.
+func (s *socksServer) readSizes() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.reads...)
+}
+
+func (s *socksServer) recordRead(n int) {
+	s.mu.Lock()
+	s.reads = append(s.reads, n)
+	s.mu.Unlock()
 }
 
 // pipe is an OpenStream that serves every stream in memory.
@@ -72,31 +108,83 @@ func (s *socksServer) listen(t *testing.T) string {
 
 func (s *socksServer) serve(conn net.Conn) {
 	defer conn.Close()
+	var r io.Reader = conn
+	if s.singleRead {
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		s.recordRead(n)
+		if err != nil || s.dropBatch {
+			return
+		}
+		// The rest of the exchange is read off the connection: a sequential client sends
+		// its next message only after the previous reply.
+		r = io.MultiReader(bytes.NewReader(buf[:n]), conn)
+	}
+	var pending []byte
+	write := func(b []byte) error {
+		switch {
+		case s.coalesce:
+			pending = append(pending, b...)
+			return nil
+		case s.dribble:
+			for _, c := range b {
+				if _, err := conn.Write([]byte{c}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		_, err := conn.Write(b)
+		return err
+	}
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		_, err := conn.Write(pending)
+		pending = nil
+		return err
+	}
+
 	var head [2]byte
-	if _, err := io.ReadFull(conn, head[:]); err != nil || head[0] != socksVersion {
+	if _, err := io.ReadFull(r, head[:]); err != nil || head[0] != socksVersion {
 		return
 	}
 	methods := make([]byte, head[1])
-	if _, err := io.ReadFull(conn, methods); err != nil {
+	if _, err := io.ReadFull(r, methods); err != nil {
 		return
+	}
+	if s.logGreeting {
+		s.log(fmt.Sprintf("greeting % x", methods))
 	}
 	want := byte(methodNone)
 	if s.user != "" {
 		want = methodPassword
 	}
-	if !contains(methods, want) {
-		conn.Write([]byte{socksVersion, methodNoAcceptable})
+	if s.chooseSet {
+		want = s.choose
+	} else if !contains(methods, want) {
+		write([]byte{socksVersion, methodNoAcceptable})
+		flush()
 		return
 	}
-	if _, err := conn.Write([]byte{socksVersion, want}); err != nil {
+	if (s.chooseSet && !contains(methods, want)) || (want != methodNone && want != methodPassword) {
+		// A method the client did not offer or cannot go on with: answer it and stop,
+		// without reading the login or the request that may follow the greeting.
+		write([]byte{socksVersion, want})
+		flush()
 		return
 	}
-	if want == methodPassword && !s.login(conn) {
+	if err := write([]byte{socksVersion, want}); err != nil {
+		return
+	}
+	if want == methodPassword && !s.login(r, write) {
+		flush()
 		return
 	}
 
 	var req [4]byte
-	if _, err := io.ReadFull(conn, req[:]); err != nil {
+	if _, err := io.ReadFull(r, req[:]); err != nil {
 		return
 	}
 	var host, kind string
@@ -107,18 +195,18 @@ func (s *socksServer) serve(conn net.Conn) {
 		if req[3] == atypIPv6 {
 			b, kind = make([]byte, 16), "ipv6"
 		}
-		if _, err := io.ReadFull(conn, b); err != nil {
+		if _, err := io.ReadFull(r, b); err != nil {
 			return
 		}
 		a, _ := netip.AddrFromSlice(b)
 		host = a.String()
 	case atypDomain:
 		var n [1]byte
-		if _, err := io.ReadFull(conn, n[:]); err != nil {
+		if _, err := io.ReadFull(r, n[:]); err != nil {
 			return
 		}
 		b := make([]byte, n[0])
-		if _, err := io.ReadFull(conn, b); err != nil {
+		if _, err := io.ReadFull(r, b); err != nil {
 			return
 		}
 		host, kind = string(b), "domain"
@@ -126,20 +214,22 @@ func (s *socksServer) serve(conn net.Conn) {
 		return
 	}
 	var port [2]byte
-	if _, err := io.ReadFull(conn, port[:]); err != nil {
+	if _, err := io.ReadFull(r, port[:]); err != nil {
 		return
 	}
 	address := net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(port[:]))))
 	s.log("connect " + kind + " " + address)
 
 	if s.refuse != 0 {
-		s.reply(conn, s.refuse)
+		write(s.replyBytes(s.refuse))
+		flush()
 		return
 	}
 	if kind == "domain" {
 		target, ok := s.names[host]
 		if !ok {
-			s.reply(conn, 0x04)
+			write(s.replyBytes(0x04))
+			flush()
 			return
 		}
 		address = target
@@ -147,11 +237,15 @@ func (s *socksServer) serve(conn net.Conn) {
 	target, err := net.Dial("tcp", address)
 	if err != nil {
 		// The tests dial only loopback: a failure is a closed port.
-		s.reply(conn, 0x05)
+		write(s.replyBytes(0x05))
+		flush()
 		return
 	}
 	defer target.Close()
-	if s.reply(conn, 0) != nil {
+	if err := write(s.replyBytes(0)); err != nil {
+		return
+	}
+	if err := flush(); err != nil {
 		return
 	}
 	go func() {
@@ -161,33 +255,32 @@ func (s *socksServer) serve(conn net.Conn) {
 	io.Copy(conn, target)
 }
 
-func (s *socksServer) login(conn net.Conn) bool {
+func (s *socksServer) login(r io.Reader, write func([]byte) error) bool {
 	var ver [2]byte
-	if _, err := io.ReadFull(conn, ver[:]); err != nil || ver[0] != passwordVersion {
+	if _, err := io.ReadFull(r, ver[:]); err != nil || ver[0] != passwordVersion {
 		return false
 	}
 	user := make([]byte, ver[1])
-	if _, err := io.ReadFull(conn, user); err != nil {
+	if _, err := io.ReadFull(r, user); err != nil {
 		return false
 	}
 	var n [1]byte
-	if _, err := io.ReadFull(conn, n[:]); err != nil {
+	if _, err := io.ReadFull(r, n[:]); err != nil {
 		return false
 	}
 	password := make([]byte, n[0])
-	if _, err := io.ReadFull(conn, password); err != nil {
+	if _, err := io.ReadFull(r, password); err != nil {
 		return false
 	}
 	s.log("login " + string(user))
 	if string(user) != s.user || string(password) != s.password {
-		conn.Write([]byte{passwordVersion, 0x01})
+		write([]byte{passwordVersion, 0x01})
 		return false
 	}
-	_, err := conn.Write([]byte{passwordVersion, 0})
-	return err == nil
+	return write([]byte{passwordVersion, 0}) == nil
 }
 
-func (s *socksServer) reply(conn net.Conn, code byte) error {
+func (s *socksServer) replyBytes(code byte) []byte {
 	b := []byte{socksVersion, code, 0}
 	if s.bindDomain {
 		b = append(b, atypDomain, byte(len("exit.example.com")))
@@ -199,8 +292,7 @@ func (s *socksServer) reply(conn net.Conn, code byte) error {
 	if code == 0 {
 		b = append(b, s.first...)
 	}
-	_, err := conn.Write(b)
-	return err
+	return b
 }
 
 func contains(b []byte, c byte) bool {

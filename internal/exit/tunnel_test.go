@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,5 +91,48 @@ func TestThroughTunnel(t *testing.T) {
 	bad := &SOCKS5{Open: open, User: "user", Password: "wrong"}
 	if err := bad.Check(dialCtx(t)); !IsLogin(err) {
 		t.Fatalf("wrong password: %v, want a login error", err)
+	}
+
+	// The one-write exchange: Check stays sequential, Dial sends the batch in one Write.
+	one := &SOCKS5{Open: open, User: "user", Password: "secret", OneWrite: true}
+	if err := one.Check(dialCtx(t)); err != nil {
+		t.Fatalf("one-write Check: %v", err)
+	}
+	oneConn, err := one.Dial(dialCtx(t), "echo.example.com:7")
+	if err != nil {
+		t.Fatalf("one-write Dial: %v", err)
+	}
+	defer oneConn.Close()
+	echo(t, oneConn, make([]byte, 50000))
+
+	_, err = one.Dial(dialCtx(t), closed)
+	var ceOne *ConnectError
+	if !errors.As(err, &ceOne) || ceOne.Code != 0x05 {
+		t.Fatalf("one-write to a closed port: %v, want a *ConnectError with code 5", err)
+	}
+	echo(t, oneConn, []byte("after the one-write refusal"))
+
+	// An upstream that reads one message and drops the rest of the batch: the one-write
+	// Dial fails with the key, and no second stream is opened.
+	drop := &socksServer{user: "user", password: "secret", singleRead: true, dropBatch: true}
+	dropSession := tunnel(t, drop)
+	opened := 0
+	dropOpen := func(context.Context) (net.Conn, error) {
+		opened++
+		return dropSession.OpenStream()
+	}
+	dropped := &SOCKS5{Open: dropOpen, User: "user", Password: "secret", OneWrite: true}
+	_, err = dropped.Dial(dialCtx(t), "echo.example.com:7")
+	if err == nil || !strings.Contains(err.Error(), "exit.one_write") {
+		t.Fatalf("a dropped batch: %v, want an error naming exit.one_write", err)
+	}
+	if IsLogin(err) {
+		t.Errorf("a dropped batch: %v is a login error", err)
+	}
+	if opened != 1 {
+		t.Errorf("opened %d streams, want 1", opened)
+	}
+	if ev := drop.events(); len(ev) != 0 {
+		t.Errorf("the dropped upstream saw %q", ev)
 	}
 }
