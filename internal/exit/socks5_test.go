@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -730,6 +731,67 @@ func TestDialOneWriteDropped(t *testing.T) {
 	}
 }
 
+// A server that reads the whole batch and answers nothing: the deadline fails the batch with
+// the key, and the cause may be the context or the stream deadline. The batch is no
+// *LoginError, no *ConnectError and no non-SOCKS5 answer, and the stream is opened and
+// closed once.
+func TestDialOneWriteNoAnswer(t *testing.T) {
+	// The read of the batch is reported through a buffered channel, so the server goroutine
+	// never blocks on it and the test knows the whole batch arrived.
+	read := make(chan error, 1)
+	open := func(ctx context.Context) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			_, err := io.ReadFull(server, make([]byte, 26))
+			read <- err
+			if err != nil {
+				return
+			}
+			<-ctx.Done()
+		}()
+		return client, nil
+	}
+	c := &streamCounter{open: open}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	conn, err := (&SOCKS5{Open: c.Open, User: "user", Password: "secret", OneWrite: true}).
+		Dial(ctx, "192.0.2.1:80")
+	if err == nil {
+		conn.Close()
+		t.Fatal("Dial succeeded")
+	}
+	if rerr := <-read; rerr != nil {
+		t.Fatalf("the server did not read the batch: %v", rerr)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("%v: neither context.DeadlineExceeded nor os.ErrDeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "exit.one_write") || !strings.Contains(err.Error(), "no fallback") {
+		t.Errorf("%q does not name exit.one_write with no fallback", err)
+	}
+	if IsLogin(err) {
+		t.Errorf("%v: a login error", err)
+	}
+	var ce *ConnectError
+	if errors.As(err, &ce) {
+		t.Errorf("%v: a *ConnectError", err)
+	}
+	if errors.Is(err, ErrNotSOCKS5) {
+		t.Errorf("%v: a non-SOCKS5 answer", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("Dial returned after %v", d)
+	}
+	if got := c.opened.Load(); got != 1 {
+		t.Errorf("opened %d streams, want 1", got)
+	}
+	if got := c.closed.Load(); got != 1 {
+		t.Errorf("closed %d streams, want 1", got)
+	}
+}
+
 // A refused login stays a *LoginError, names the key and is not retried sequentially.
 func TestDialOneWriteLoginRefused(t *testing.T) {
 	srv := &socksServer{user: "user", password: "secret", singleRead: true}
@@ -777,8 +839,8 @@ func TestCheckOneWriteStaysSequential(t *testing.T) {
 	}
 }
 
-// A cancelled batch read ends with the context cause, and the stream is opened and closed
-// once.
+// A cancelled batch read ends with the context cause and the key, and the stream is opened
+// and closed once.
 func TestDialOneWriteCancel(t *testing.T) {
 	open := func(ctx context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
@@ -797,6 +859,9 @@ func TestDialOneWriteCancel(t *testing.T) {
 		Dial(ctx, "192.0.2.1:80")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "exit.one_write") {
+		t.Errorf("%q does not name exit.one_write", err)
 	}
 	if d := time.Since(start); d > 10*time.Second {
 		t.Errorf("Dial returned after %v", d)

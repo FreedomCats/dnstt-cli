@@ -155,8 +155,15 @@ func (s *SOCKS5) handshake(ctx context.Context, address string, req []byte) (net
 		conn.Close()
 		var le *LoginError
 		var ce *ConnectError
-		if !errors.As(err, &le) && !errors.As(err, &ce) {
-			err = fmt.Errorf("SOCKS5 exit: %w", context.Cause(ctx))
+		cause := context.Cause(ctx)
+		switch {
+		case errors.As(err, &le) || errors.As(err, &ce):
+		case errors.Is(err, errOneWrite):
+			// The read that the end of ctx interrupted is the failure of the batch: the
+			// key stays, and the cause is named too.
+			err = fmt.Errorf("%w: %w", err, cause)
+		default:
+			err = fmt.Errorf("SOCKS5 exit: %w", cause)
 		}
 		return nil, err
 	}
@@ -387,10 +394,15 @@ func writeAll(conn net.Conn, b []byte) error {
 	return nil
 }
 
+// errOneWrite marks a failure of the one-write exchange inside the package: the text names
+// the key to the user, and handshake keeps the mark when the end of the context is what
+// ended the batch.
+var errOneWrite = errors.New("exit.one_write: no fallback")
+
 // oneWriteError marks a failure of the one-write exchange: the batch is not taken, and
 // there is no fallback to the sequential path.
 func oneWriteError(err error) error {
-	return fmt.Errorf("%w (exit.one_write: no fallback)", err)
+	return fmt.Errorf("%w (%w)", err, errOneWrite)
 }
 
 // streamError is a failure of the stream in the middle of the exchange. An exit that
