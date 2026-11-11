@@ -408,8 +408,8 @@ connects even if DNS protection or the kill-switch could not be set.
 process: the machine is not left without network, but it is not protected either — a
 permanent block surviving dnstt-cli is deliberately absent. What can remain is system DNS
 on Linux (a `resolvconf` entry or a rewritten `/etc/resolv.conf` with a backup); the next
-`connect` removes it and says so. On Windows a registry key with the old adapter's DNS
-remains; without the adapter it affects nothing.
+`tun` connect removes it and says so under `-v`. On Windows a registry key with the old
+adapter's DNS remains; without the adapter it affects nothing.
 
 **`socks` has no protection.** Only what apps send to the proxy goes through the tunnel.
 Names go to the server only if the app passes them to the proxy (`socks5h` in curl, "proxy

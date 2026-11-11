@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: 9e7a9f8
 depends: [05-protection]
 ---
@@ -98,8 +98,8 @@ IPv6/Happy-Eyeballs part of the browser branch are not.
 - **P2.** After `kill -9` the adapter, routes, table and lock disappeared, but the system-DNS
   record remained and the next start first could not resolve the DoH name.
   [The recovery fix](04-recover-system-dns/plan.md) moves the removal right after the
-  adapter reservation, before the first session; the re-run printed the removal line,
-  established a session and answered 200, and the clean stop left no record.
+  adapter reservation, before the first session; the re-run with `-v` printed the removal
+  line, established a session and answered 200, and the clean stop left no record.
 - **P3.** The locked state, `-no-kill-switch` and `kill_switch = false` behave as §05a says;
   the §05a exceptions were seen. `-allow-leak` was covered in the container, because the
   machine has no `nft`.
@@ -120,8 +120,19 @@ IPv6/Happy-Eyeballs part of the browser branch are not.
   free after it stopped.
 
 The failures found point at `dnstt-cli` alone and were fixed inside this stage (children 4 and
-5); none is left open. What stays recorded as a limit, not a defect: the tunnel's shared
-capacity (about 58 KB/s, the same for both datapaths) and the DNS listener's gate of 64
-exchanges in flight; the browser's fan-out stayed far below both. The evidence is in
-`doc/runs/tun-matrix/` and `doc/runs/browser-container/`, the filled checklist in
-`doc/local/runbook-tun-linux.md`; all outside git, and no value is in a tracked file.
+5); none is left open. The DNS listener's gate of 64 exchanges in flight stays recorded as a
+limit, not a defect: the 65th gets an immediate SERVFAIL, and the browser's fan-out peaked at
+four, far below it. The tunnel's shared channel is a reference rather than a fixed ceiling —
+about 58 KB/s in the diagnosis, about 52 KiB/s under 65 concurrent fetches and about 100 KiB/s
+for the quiet heavy page; changing its payload size, MTU, the resolver or KCP remains a user
+decision. The evidence is in `doc/runs/tun-matrix/` and `doc/runs/browser-container/`, the
+filled checklist in `doc/local/runbook-tun-linux.md`; all outside git, and no value is in a
+tracked file.
+
+The stage was accepted on the final tree: `gofmt` outside `core/`, the CI vet split on Linux
+and Windows, the Linux build, the Windows cross-build with the compilation of every test
+package, `git diff --check`, the full `go test -race -count=1 ./...` with the keyring/D-Bus
+tests enabled, `DNSTT_CLI_TEST_NETNS=0` and the four stated netguard exclusions applied by
+`-skip`, and the netns suites in the already-present `debian:trixie` container
+(`linuxsys.test` 72 passed, `datapath.test` 92 passed, no skips). The accepted run made no
+live call, pulled no image and changed no host route or DNS.

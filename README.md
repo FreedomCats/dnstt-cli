@@ -30,8 +30,8 @@ server, not the sites. What can still be seen:
   `kill_switch = false` let traffic pass while the tunnel is down; `-allow-leak` connects
   even if the protection could not be set.
 - **After `kill -9`** — the adapter, routes and nftables table disappear with the process; a
-  system-DNS record left behind is removed by the next start with a message. Ctrl+C removes
-  everything at once.
+  system-DNS record left behind is removed by the next `tun` start, with a message under `-v`.
+  Ctrl+C removes everything at once.
 
 `socks` mode has no such protection: only what an application sends to the local proxy goes
 through the tunnel. If the application resolves names itself, its DNS goes to the ISP; passing

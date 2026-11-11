@@ -272,4 +272,4 @@ in the code, and the one-write question is answered, implemented and documented.
   stated exclusions, CI vet split on Linux and Windows, static build, Windows cross-build and
   test compilation, the tool race suite, gofmt and whitespace — and found no defect. The
   app-level keepalive behavioural test gap stays recorded as a risk in
-  [06-apply-timeouts](../06-apply-timeouts/plan.md).
+  [06-apply-timeouts](06-apply-timeouts/plan.md).
