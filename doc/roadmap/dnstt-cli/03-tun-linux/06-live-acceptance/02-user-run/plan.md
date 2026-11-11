@@ -2,7 +2,7 @@
 kind: task
 status: blocked
 detailed: true
-depends: [01-runbook, 04-recover-system-dns, 05-secret-service-helper]
+depends: [01-runbook, 04-recover-system-dns, 05-secret-service-helper, 06-tun-datapath-latency]
 ---
 
 # The Linux matrix by the user
@@ -92,10 +92,45 @@ working around it silently.
 
 ## Blocked
 
-Waiting for the user's live run of P0–P8 on the real Linux machine. The runbook is
-`doc/local/runbook-tun-linux.md`; the raw outputs go to `doc/runs/tun-matrix/`. No agent
-runs any step or reads the raw evidence; the user reports verdicts and the side of any
-failure, without real values. The node stays blocked until the user's results are in. It
-also waits for [the `kill -9` leftover fix](../04-recover-system-dns/plan.md): with the record
-still in the system DNS the next run cannot resolve a resolver's host name, so P2 cannot pass
-before that fix is in.
+The matrix has been run. The agent ran P0–P4, P6 and P7 on the real Linux machine; P3c–P3f
+were covered in an isolated container and P3e is not runnable on this host. Two real defects
+were found and fixed inside this stage: the `kill -9` system-DNS recovery order
+([04](../04-recover-system-dns/plan.md)) and the undispatched secret-service helper
+([05](../05-secret-service-helper/plan.md)); P2 and the keyring path were re-run green after
+them.
+
+Two items are not seen, and the node waits for the user's decision on them:
+
+- **P5, network change.** No second network is available to the agent, and changing the link
+  would cut the session. The stage's `Done when` says "a network change is noticed and the
+  session restarts", so this line is unproven without it.
+- **The browser/QUIC branch of P4.** Retried by the agent with the session kept up. It was
+  recorded as a reproducible failure of the TUN datapath, not a browser limitation: through
+  the same tunnel and exit, five page fetches over SOCKS take 0.7–0.8 s each, while through
+  the TUN the TLS handshake alone takes 1.1–4.7 s, one of five fetches times out at 25 s, a
+  plain-HTTP fetch needs 2.8 s to the first byte, four parallel fetches all time out at 30 s,
+  and a headless browser loads neither the HTTPS nor the plain-HTTP page. Direct network to
+  the same sites is 0.13–0.2 s; DNS through the listener answers in 0.15–0.2 s. A clean
+  reproduction in an isolated network namespace was needed.
+
+The TUN datapath was then measured, and the record above did not survive it:
+[the latency stage](../06-tun-datapath-latency/plan.md) closed without a defect. On a local
+shaped stand the TUN path adds milliseconds to SOCKS5 with zero local loss, and in a
+quiet container on the real tunnel both datapaths give the same columns with identical bytes
+and no timeout; the seconds and timeouts above came from a session that was already saturated
+(about 160 open streams, peaking at 324 during the browser run, with a neighbouring tunnel
+client), not from the datapath. The only measured ceiling is the tunnel's own shared channel,
+about 58 KB/s, which both datapaths share. No fix follows.
+
+The TUN runs take over the machine's routes and system DNS, as `tun` mode does by design. A
+retry's cleanup killed the `script` wrapper before `connect` could restore the system DNS,
+leaving the tunnel's dead address first in `/etc/resolv.conf`; connectivity stalled and an
+unrelated `qwdtt-cli` process had to be killed. The leftover was removed with
+`resolvconf -d tun.dnstt-cli`. No agent-run `tun` session on the host again without an explicit
+fresh request from the user; further live TUN work goes into a container with its own network
+namespace, with the host untouched.
+
+The choice is the user's: what to do with P5, and — if the browser still fails on a quiet
+session — which browser path to diagnose next (its IPv6/QUIC/DoH behaviour rather than the
+datapath). The filled checklist is `doc/local/runbook-tun-linux.md`, the raw evidence is in
+`doc/runs/tun-matrix/`; both stay outside git and carry no real value.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/identity"
+	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // The point-to-point link of the tun datapath has two ends. The tunnel's only address is
@@ -87,6 +88,10 @@ type tunAdapter struct {
 	// netguard excludes it from the physical interface choice. 0 until the adapter
 	// exists.
 	id uint64
+	// stats returns the stack's counters; nil in the tests' fake adapter. The local
+	// path's losses — retransmits, refused connection requests, TX queue drops — are read
+	// from here, so a stand can tell them from the tunnel's.
+	stats func() tcpip.Stats
 	// configure sets the adapter's address and MTU and brings it up. A repeated call
 	// reconfigures.
 	configure func() error

@@ -55,6 +55,11 @@ the user-run matrix and the record of its results.
    bridge that reads the invoking user's keyring under `sudo` is wired into the CLI; without
    it a `secretservice:` reference cannot be read under `sudo`. P0 of the matrix found it.
    Task.
+6. [TUN datapath latency and stalls](06-tun-datapath-latency/plan.md) — the TUN path was
+   reported as seconds slow and stalling under concurrency while the same tunnel over SOCKS5
+   was fast; the diagnosis measured it on a local stand and in a quiet container A/B and
+   closed without a defect — the cost is the tunnel's own capacity — so the fix was dropped.
+   The retried browser/QUIC branch raised it. Stage; two children.
 
 The runbook is prepared and reviewed before the user starts, so that a mistake in a command
 costs a line and not a wasted session. The matrix is then run in the user's time; the record
