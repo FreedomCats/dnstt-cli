@@ -33,8 +33,21 @@ const tunFlags = unix.IFF_TUN | unix.IFF_NO_PI
 // running dnstt-cli's lock.
 var tunLockName = "@" + identity.Name + "-tun"
 
+// systemDNS is what detectSystemDNS returns: linuxsys.SystemDNS, an interface for the
+// sake of the tests, as resolvedBus is in linuxsys. It is the part of the system DNS the
+// adapter and RecoverSystemDNS use.
+type systemDNS interface {
+	String() string
+	Method() linuxsys.DNSMethod
+	Warning() string
+	Applied() bool
+	Recover() (string, error)
+	Set(index int, servers []netip.Addr) error
+	Revert(index int) error
+}
+
 // detectSystemDNS finds how to set the system DNS; a variable for the tests.
-var detectSystemDNS = linuxsys.DetectSystemDNS
+var detectSystemDNS = func(name string) (systemDNS, error) { return linuxsys.DetectSystemDNS(name) }
 
 // tunUnsupported reports why the adapter cannot work on this system: the TUN device is
 // missing when the kernel has no tun module.
@@ -81,7 +94,9 @@ func openTunAdapter(name string, dialer exit.Dialer, tunDNS netip.Addr, logf fun
 		logf("[TUN] Warning: %s", w)
 	}
 	// Recover after the lock and before Set: only the lock tells that no other
-	// dnstt-cli is running, and the DNS of a running one must not be removed.
+	// dnstt-cli is running, and the DNS of a running one must not be removed. The run
+	// also removes the leftover before the first attempt (connect); this call covers a
+	// caller that did not and stays silent on a clean system, where the record is gone.
 	done, err := dns.Recover()
 	if err != nil {
 		unlock()
@@ -175,6 +190,27 @@ func openTunAdapter(name string, dialer exit.Dialer, tunDNS netip.Addr, logf fun
 		},
 	}, nil
 }
+
+// RecoverSystemDNS removes the system DNS that a crashed run left behind (DNSRecoverer):
+// on Linux the resolvconf record or the overwritten /etc/resolv.conf, named after the
+// adapter. connect calls it under the reservation and before Supervisor.Run, because the
+// first session may resolve a resolver's host name through the system DNS; the recovery
+// in openTunAdapter comes only after that session. It opens no adapter and calls no Set
+// or Revert; its errors are worded as there. A clean system, or a second call, finds
+// nothing and stays silent.
+func (t *Tun) RecoverSystemDNS() (string, error) {
+	dns, err := detectSystemDNS(t.opts.Name)
+	if err != nil {
+		return "", fmt.Errorf("system DNS: %w", err)
+	}
+	done, err := dns.Recover()
+	if err != nil {
+		return "", fmt.Errorf("system DNS: %w", err)
+	}
+	return done, nil
+}
+
+var _ DNSRecoverer = (*Tun)(nil)
 
 // foreignLinkError is the refusal when the interface name already exists and was not
 // created by dnstt-cli.

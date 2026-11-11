@@ -512,6 +512,27 @@ func TestSystemDNSResolvconfRecover(t *testing.T) {
 	}
 }
 
+// A record of another name is not ours: Recover leaves it alone and runs no resolvconf
+// -d.
+func TestSystemDNSResolvconfForeignRecord(t *testing.T) {
+	cmds, run := resolvconfSetup(t, "Debian resolvconf 1.91")
+	path := filepath.Join(run, "resolvconf", "interface", "tun.other")
+	writeFile(t, path, "nameserver 192.0.2.53\n")
+	dns, err := DetectSystemDNS("dnstt-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := dns.Recover(); err != nil || done != "" {
+		t.Errorf("Recover with a foreign record: %q, %v", done, err)
+	}
+	if len(cmds.calls) != 0 {
+		t.Errorf("calls %q, want none", cmds.calls)
+	}
+	if !exists(path) {
+		t.Error("the record of another name was removed")
+	}
+}
+
 func TestSystemDNSResolved(t *testing.T) {
 	etc, _ := fakeDNSRoots(t)
 	writeFile(t, filepath.Join(etc, "resolv.conf"), "nameserver 127.0.0.53\n")

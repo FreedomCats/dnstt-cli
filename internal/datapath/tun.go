@@ -51,7 +51,9 @@ type TunOptions struct {
 // its descriptor feeds the netstack in-process, with no second process and no descriptor
 // handover.
 //
-// Tun is Persistent and Reserver: the adapter and the lock on it live the whole run.
+// Tun is Persistent and Reserver: the adapter and the lock on it live the whole run. On
+// Linux it is also DNSRecoverer: under the reservation, before the first attempt, it
+// removes the system DNS a crashed run left behind.
 // Start of every session configures the adapter once and puts the routes, the netstack's
 // address and the system DNS in place; Suspend between sessions removes them; Close
 // removes the adapter. The host side needs root and /dev/net/tun; the lifecycle itself

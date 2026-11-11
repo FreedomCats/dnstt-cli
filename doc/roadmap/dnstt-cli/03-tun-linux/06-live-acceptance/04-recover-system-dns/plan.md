@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -217,3 +217,50 @@ no such cushion — the record's servers are what the file and `NetworkDNS` see 
 - Windows stays untouched.
 - Nothing is needed from the user for this task; the live check is the repeated P2, already in
   `02-user-run`.
+
+## Outcome
+
+The recovery now runs where the machine is already claimed for the run: `connect -datapath
+tun` removes the system DNS a `kill -9` run left behind under the reservation and before
+`Supervisor.Run`, so the first session's lookup of a resolver's host name no longer leads
+into the adapter of the dead run. The per-adapter recovery in `openTunAdapter` stays as a
+second guard and is silent after the early call.
+
+- `datapath.DNSRecoverer` is the new optional seam, `RecoverSystemDNS() (string, error)`,
+  next to `Reserver`; its comment carries the reason for the order and the reservation.
+  `socks` and any datapath without the interface are untouched.
+- `(*Tun).RecoverSystemDNS` (Linux only) detects the method by the adapter name, wraps
+  every error as `system DNS: %w` and returns the `Recover` message unchanged. It opens no
+  adapter and calls no `Set`/`Revert`, so it needs no privilege of its own; Windows has no
+  method and no interface. `detectSystemDNS` is now a variable returning the small
+  `systemDNS` interface (`String`, `Method`, `Warning`, `Applied`, `Recover`, `Set`,
+  `Revert`), replaceable by tests; `openTunAdapter` is otherwise unchanged and still
+  formats through `String`. The comment there notes the early call and the silence on a
+  clean system.
+- `connect` reserves and recovers through `prepareDatapath`, which returns the release: a
+  recovery error releases the reservation, is returned as it is (`system DNS: <cause>`) and
+  stops the run before any dial; a non-empty message is logged once as `[TUN] <message>`,
+  and a clean system prints nothing. The reservation is released exactly once on every
+  path. No exception is made for `-allow-leak`.
+- Tests: `internal/cli/connect_prepare_test.go` pins the order, the release on error, the
+  logged and the silent message and a datapath with neither interface;
+  `internal/datapath/tun_recover_linux_test.go` covers the method with a fake detector (a
+  leftover passed through, a clean system, a `Recover` error, a detection error) with no
+  adapter, no `/dev/net/tun` and no root; `internal/linuxsys/dns_linux_test.go` gains
+  `TestSystemDNSResolvconfForeignRecord`, where a `tun.other` record is left alone and no
+  `resolvconf -d` runs. `Recover` itself needed no change.
+- Checks: `gofmt` clean on the touched files; `git diff --check`; `go build ./...`; the CI
+  vet split on Linux and for Windows; `CGO_ENABLED=0 go build ./...`; the Windows
+  cross-build and `go test -c` of the packages with tests; the full
+  `go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1` and
+  `DNSTT_CLI_TEST_NETNS=0`, the four external-network netguard live checks excluded by
+  `-skip`, so no live call was made. No root-only or netns suite ran, no network, no new
+  dependency; `core/`, `go.mod` and `go.sum` are untouched.
+- Independent review found no blocker and no remark worth changing. One line was added to
+  the `Tun` comment in `tun.go` (it is also `DNSRecoverer` on Linux), beyond the written
+  steps: the comment lists the type's roles and was otherwise incomplete.
+- Not here, as the plan says: an app-level order test needs root, `/dev/net/tun` and a fake
+  `resolvconf` in a netns container, which is a separate task; the live acceptance is the
+  repeated P2 in `02-user-run`.
+
+No real problem was left incompletely fixed because of cost.

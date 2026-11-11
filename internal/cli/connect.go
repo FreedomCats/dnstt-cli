@@ -157,14 +157,16 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		tunnel.Supervisor.SetDatapath(d)
 	}
 
-	// Hold what has to be taken once, before the first attempt.
-	if r, ok := dp.(datapath.Reserver); ok {
-		release, err := r.Reserve()
-		if err != nil {
-			return err
-		}
-		defer release()
+	// Hold what has to be taken once, before the first attempt, and remove the system
+	// DNS a crashed run left behind. Supervisor.Run comes later in this function, and
+	// its first session resolves a resolver's host name through the system DNS, while
+	// Tun.Start and its own recovery come only after that session: without this call the
+	// leftover of kill -9 outlives the attempt.
+	release, err := prepareDatapath(dp, logf)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	// Keep the core's own sockets out of a datapath that takes all system traffic, and
 	// follow the network changes.
@@ -276,6 +278,41 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 			return <-errCh
 		}
 	}
+}
+
+// prepareDatapath takes what has to be taken once, before the first attempt, and returns
+// a function that releases it: the datapath's reservation (Reserver) and, under it, the
+// system DNS a crashed run left behind (DNSRecoverer).
+//
+// The recovery runs here rather than in the first Start because Supervisor.Run comes
+// later and its first session may resolve a resolver's host name through the system DNS,
+// while the adapter's own recovery comes only after that session. Under the reservation
+// the leftover can only be the dead run's; without it, the call could remove the DNS of
+// a running dnstt-cli. A datapath with neither interface (socks) is left alone, and its
+// release does nothing.
+func prepareDatapath(dp app.Datapath, logf func(string, ...any)) (release func(), err error) {
+	if r, ok := dp.(datapath.Reserver); ok {
+		release, err = r.Reserve()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if r, ok := dp.(datapath.DNSRecoverer); ok {
+		done, err := r.RecoverSystemDNS()
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			return nil, err
+		}
+		if done != "" {
+			logf("[TUN] %s", done)
+		}
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return release, nil
 }
 
 // killSwitchPolicy decides whether the kill-switch is on for this run and, when it is

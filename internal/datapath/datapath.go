@@ -62,6 +62,23 @@ type Reserver interface {
 	Reserve() (release func(), err error)
 }
 
+// DNSRecoverer is an optional part of a datapath: an implementation whose system DNS can
+// outlive a crashed run. On Linux a run killed with kill -9 leaves the resolvconf record
+// or the overwritten /etc/resolv.conf behind, and it points into the adapter that died
+// with the process. The next start must remove it before the first attempt: the attempt
+// may resolve a resolver's host name through the system DNS, which still leads into the
+// adapter that is not open.
+//
+// The caller calls RecoverSystemDNS under the reservation (Reserver) and before the first
+// attempt. The reservation is what makes the call safe: it says no other dnstt-cli is
+// running on the machine, so the leftover can only be the dead run's, and the DNS of a
+// running one is not at risk (linuxsys.SystemDNS.Recover). It returns what was removed;
+// "" means nothing was left. A second call is harmless: the first leaves nothing to
+// remove.
+type DNSRecoverer interface {
+	RecoverSystemDNS() (string, error)
+}
+
 // Adapter is an optional part of a datapath: an implementation that has a system interface
 // of its own that the tunnel must not take for the physical one. The caller passes the id
 // to netguard: it is the LUID on Windows and the interface index on Linux, and 0 means
