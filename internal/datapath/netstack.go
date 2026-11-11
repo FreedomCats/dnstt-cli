@@ -61,6 +61,9 @@ type netstack struct {
 	once   sync.Once
 	mu     sync.Mutex
 	closed bool // no more streams or exchanges are started
+	// streams are the exit streams of the connections in progress: close closes them,
+	// so a relay stuck in a write into the exit ends with the stack.
+	streams map[net.Conn]struct{}
 }
 
 // newNetstack starts the stack on link. tunDNS, when set, is the DNS behind the exit that
@@ -108,6 +111,7 @@ func newNetstack(link stack.LinkEndpoint, dialer exit.Dialer, tunDNS netip.Addr)
 		dialer:     dialer,
 		tunDNS:     tunDNS,
 		dnsTimeout: dnsQueryTimeout,
+		streams:    make(map[net.Conn]struct{}),
 	}
 	n.ctx, n.cancel = context.WithCancel(context.Background())
 	fwd := tcp.NewForwarder(s, forwardWindow, forwardInFlight, n.handle)
@@ -289,7 +293,36 @@ func (n *netstack) serve(id stack.TransportEndpointID, wq *waiter.Queue, ep tcpi
 		ep.Abort()
 		return
 	}
+	if !n.track(target) {
+		// The netstack is closing: track has closed the stream, and the client gets a
+		// reset instead of a connection that goes nowhere.
+		ep.Abort()
+		return
+	}
+	defer n.untrack(target)
 	relay(conn, target)
+}
+
+// track adds the exit stream of one connection to the ones close closes. false — the
+// netstack is closing, and the stream is closed here instead.
+func (n *netstack) track(conn net.Conn) bool {
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		conn.Close()
+		return false
+	}
+	n.streams[conn] = struct{}{}
+	n.mu.Unlock()
+	return true
+}
+
+// untrack closes and forgets the exit stream of a connection whose relay has ended.
+func (n *netstack) untrack(conn net.Conn) {
+	n.mu.Lock()
+	delete(n.streams, conn)
+	n.mu.Unlock()
+	conn.Close()
 }
 
 // inject delivers a packet from the adapter to the stack. The packet is a whole IPv4
@@ -331,22 +364,35 @@ func (n *netstack) next(ctx context.Context, write func([]byte)) bool {
 	return true
 }
 
-// close stops the stack and waits for the streams, the DNS read loop and its exchanges.
-// The link is not closed: removing the NIC detaches a fdbased endpoint and stops its
-// reader, and the fd and the endpoint belong to the caller. Repeated calls are harmless.
+// close stops the stack, closes the exit streams of the connections in progress and waits
+// for the streams, the DNS read loop and its exchanges. The link is not closed: removing
+// the NIC detaches a fdbased endpoint and stops its reader, and the fd and the endpoint
+// belong to the caller. Repeated calls are harmless.
 func (n *netstack) close() {
 	n.once.Do(func() {
-		// closed and the listener are taken under one lock: no read loop is started once
-		// close waits for them.
+		// closed, the listener and the streams are taken under one lock: no read loop is
+		// started and no stream is added once close waits for them.
 		n.mu.Lock()
 		conn := n.dnsConn
 		n.dnsConn = nil
 		n.dnsAddr = netip.Addr{}
+		streams := make([]net.Conn, 0, len(n.streams))
+		for s := range n.streams {
+			streams = append(streams, s)
+		}
+		clear(n.streams)
 		n.closed = true
 		n.mu.Unlock()
 		if conn != nil {
 			// ReadFrom returns; closing the stack below would not wake it.
 			conn.Close()
+		}
+		// Closing the stack ends the adapter side of every relay but not a write that is
+		// stuck in the exit: a deadline in the past breaks it, and closing the stream
+		// ends both copies of the relay.
+		for _, s := range streams {
+			_ = s.SetDeadline(time.Unix(1, 0))
+			_ = s.Close()
 		}
 		n.cancel()
 		n.stack.Close()

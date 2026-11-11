@@ -101,10 +101,15 @@ IPv6/Happy-Eyeballs part of the browser branch are not.
   adapter reservation, before the first session; the re-run with `-v` printed the removal
   line, established a session and answered 200, and the clean stop left no record.
 - **P3.** The locked state, `-no-kill-switch` and `kill_switch = false` behave as §05a says;
-  the §05a exceptions were seen. `-allow-leak` was covered in the container, because the
-  machine has no `nft`.
-- **P4.** Names resolve through the adapter, a connected public UDP send is refused at once,
-  and outward IPv6 is blocked. The browser branch was measured in a quiet throwaway container
+  loopback and the local network without port 53 were seen in the container, and the
+  IPv6/DHCPv6/ND exceptions together with the outward block were proven in the netns suite,
+  on real nftables with IPv6 on. `-allow-leak` was covered in the container — the refusal,
+  the warning and the empty rule set — because the machine has no `nft`; a working tunnel
+  under `-allow-leak` was not exercised.
+- **P4.** Names resolve through the adapter, and a connected public UDP send is refused at
+  once. The outward IPv6 block and the local IPv6/ND/DHCPv6 exceptions are proven by the
+  netns suite with IPv6 switched on; the machine's network has no global IPv6, so the live
+  effect was not observed. The browser branch was measured in a quiet throwaway container
   ([the container task](07-browser-container/plan.md)): all four headless Chromium phases
   loaded, the browser's DNS fan-out peaked at four queries, the exit answered 65 of 65
   CONNECTs, and streams drained after every phase. The earlier host failure was a saturated

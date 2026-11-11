@@ -266,6 +266,100 @@ func waitGoroutines(t *testing.T, before int) {
 	}
 }
 
+// stalledConn is an exit stream whose peer neither reads nor writes: Read and Write wait
+// until the stream is closed or its deadline passes. written is closed by the first Write,
+// so a test knows the relay is stuck in it.
+type stalledConn struct {
+	written     chan struct{}
+	unblock     chan struct{}
+	writtenOnce sync.Once
+	closeOnce   sync.Once
+}
+
+func newStalledConn() *stalledConn {
+	return &stalledConn{written: make(chan struct{}), unblock: make(chan struct{})}
+}
+
+func (c *stalledConn) Write([]byte) (int, error) {
+	select {
+	case <-c.unblock:
+		return 0, errors.New("the stalled stream is closed")
+	default:
+	}
+	c.writtenOnce.Do(func() { close(c.written) })
+	<-c.unblock
+	return 0, errors.New("the stalled stream is closed")
+}
+
+func (c *stalledConn) Read([]byte) (int, error) {
+	<-c.unblock
+	return 0, errors.New("the stalled stream is closed")
+}
+
+func (c *stalledConn) Close() error {
+	c.closeOnce.Do(func() { close(c.unblock) })
+	return nil
+}
+
+// SetDeadline ends the wait when the deadline is in the past, as a smux stream's does; a
+// zero or future deadline changes nothing here.
+func (c *stalledConn) SetDeadline(t time.Time) error {
+	if !t.IsZero() && !t.After(time.Now()) {
+		return c.Close()
+	}
+	return nil
+}
+
+func (c *stalledConn) SetReadDeadline(t time.Time) error  { return c.SetDeadline(t) }
+func (c *stalledConn) SetWriteDeadline(t time.Time) error { return c.SetDeadline(t) }
+
+func (c *stalledConn) LocalAddr() net.Addr  { return stalledAddr{} }
+func (c *stalledConn) RemoteAddr() net.Addr { return stalledAddr{} }
+
+type stalledAddr struct{}
+
+func (stalledAddr) Network() string { return "stalled" }
+func (stalledAddr) String() string  { return "stalled" }
+
+// A relay blocked in a write into an exit stream whose peer does not read must not hold
+// close: it ends the stream, the relay returns and no goroutine survives.
+func TestNetstackCloseStalledRelay(t *testing.T) {
+	before := runtime.NumGoroutine()
+	stream := newStalledConn()
+	p := newPair(t, dialerFunc(func(context.Context, string) (net.Conn, error) {
+		return stream, nil
+	}))
+	p.addAddresses(t)
+	conn := p.dial(t, "203.0.113.7:80")
+	// The data reaches the exit stream and the write there stops until the stream is
+	// closed or its deadline passes.
+	if _, err := conn.Write([]byte("into the stalled exit")); err != nil {
+		t.Fatalf("the client write: %v", err)
+	}
+	select {
+	case <-stream.written:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the relay did not write into the exit stream")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		p.close()
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		// close itself must end the stream. Unstick it by hand, so the cleanup does not
+		// hang with the test, and fail.
+		stream.Close()
+		<-closed
+		t.Fatal("close waits for a relay stuck in a write into the exit stream")
+	}
+	conn.Close()
+	waitGoroutines(t, before)
+}
+
 // The adapter's address is a local address of the stack, and removal is harmless.
 func TestNetstackAddress(t *testing.T) {
 	ns := newTestNetstack(t, dialerFunc(func(context.Context, string) (net.Conn, error) {

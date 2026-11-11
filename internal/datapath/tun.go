@@ -134,6 +134,11 @@ func NewTun(opts TunOptions) (*Tun, error) {
 	if strings.TrimSpace(opts.Name) == "" {
 		opts.Name = identity.Name
 	}
+	if opts.Logf == nil {
+		// The adapter seam takes logf as it is and calls it: silent is a no-op here,
+		// not a nil check at every call.
+		opts.Logf = func(string, ...any) {}
+	}
 	return &Tun{opts: opts, openAdapter: openTunAdapter}, nil
 }
 

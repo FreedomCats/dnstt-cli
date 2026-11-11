@@ -335,9 +335,9 @@ on; `-no-kill-switch` and `-allow-leak` choose the behaviour for one run.
   that does not exist, so a socks run printed the kill-switch lines on a death or a
   `Restart`; it is now set only after a successful `Start`, with a test. No rejected
   finding.
-- Not changed here, pre-existing: `profile add` cannot save its minimal profile, because
-  `SaveProfilesTo` requires `domain` and `pubkey`. The explicit `true` is set in code, but
-  the command's end-to-end path stays broken until that validation is revisited.
+- Not changed here, pre-existing: `profile add` could not save its minimal profile, because
+  `SaveProfilesTo` requires `domain` and `pubkey`. The wizard of stage 2 (`f2b088b`) later
+  made `profile add` ask for both, so the command saves end to end again.
 - Only `internal/config`, `internal/resolvers`, `internal/app`, `internal/datapath`,
   `internal/supervisor`, `internal/cli` and this plan change; `internal/datapath` also
   needed one `Requires` assertion in `tun_lock_linux_test.go`. `internal/linuxsys`,

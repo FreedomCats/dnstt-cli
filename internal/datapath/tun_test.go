@@ -146,14 +146,16 @@ type fakeOpener struct {
 	adapter *fakeAdapter
 	names   []string
 	tunDNS  []netip.Addr
+	logfs   []func(string, ...any)
 }
 
-func (o *fakeOpener) open(name string, _ exit.Dialer, tunDNS netip.Addr, _ func(string, ...any)) (*tunAdapter, error) {
+func (o *fakeOpener) open(name string, _ exit.Dialer, tunDNS netip.Addr, logf func(string, ...any)) (*tunAdapter, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.opens++
 	o.names = append(o.names, name)
 	o.tunDNS = append(o.tunDNS, tunDNS)
+	o.logfs = append(o.logfs, logf)
 	if o.err != nil {
 		return nil, o.err
 	}
@@ -176,6 +178,12 @@ func (o *fakeOpener) seenTunDNS() []netip.Addr {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return slices.Clone(o.tunDNS)
+}
+
+func (o *fakeOpener) seenLogf() []func(string, ...any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.logfs)
 }
 
 // newFakeTun is a Tun over a fake adapter; the real opener needs root and /dev/net/tun.
@@ -398,6 +406,30 @@ func TestNewTun(t *testing.T) {
 	if w.opts.Name != identity.Name {
 		t.Errorf("default name %q, want %q", w.opts.Name, identity.Name)
 	}
+}
+
+// A nil Logf is silent, not a panic: NewTun normalizes it, and the adapter seam, which
+// calls logf without a check, receives a non-nil one.
+func TestNewTunNilLogf(t *testing.T) {
+	w, err := NewTun(TunOptions{Dialer: dialerFunc(nil), TunDNS: netip.MustParseAddr("203.0.113.53")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.opts.Logf == nil {
+		t.Fatal("NewTun left Logf nil")
+	}
+	w.logf("[TUN] %s", "silent")
+	f := &fakeAdapter{}
+	o := &fakeOpener{adapter: f}
+	w.openAdapter = o.open
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	logfs := o.seenLogf()
+	if len(logfs) != 1 || logfs[0] == nil {
+		t.Fatalf("the opener was given logf %v, want one non-nil", logfs)
+	}
+	logfs[0]("[TUN] %s", "through the opener")
 }
 
 // fakeGuard is the DNS protection of the datapath in memory: it records into the same
