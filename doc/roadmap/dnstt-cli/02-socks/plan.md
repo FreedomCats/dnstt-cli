@@ -55,9 +55,8 @@ server of the user's own (the old `S0`) is not a node: it is a live prerequisite
 
 - `TestApplyReadsV6Only` (netguard) skips without IPv6 in the kernel; the CI `test` job
   runs without `-v`, so it is not yet confirmed that it runs there rather than skips.
-- The client keepalive timeout stays at the upstream 2 min until it is measured on a live
-  server; `DefaultHandshakeTimeout` (20 s) is preliminary for the same reason.
-- uTLS stays at `v1.7.x` until the randomized-hello bug of `v1.8` is fixed.
+- uTLS stays at `v1.7.x` until the randomized-hello bug of `v1.8` is fixed; the five
+  `DefaultUTLS` labels were seen live through DoH and DoT (R9).
 
 ## Outcome
 

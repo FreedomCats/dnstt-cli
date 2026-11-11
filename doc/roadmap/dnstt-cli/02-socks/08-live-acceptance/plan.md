@@ -6,8 +6,8 @@ base: 8302b38
 
 # Live acceptance
 
-The stage's goal checked against a real server, on both platforms, and the numbers that
-were left preliminary until then. `E1`, `S8`.
+The stage's goal checked against a real server, on both platforms, and the numbers the live
+runs settled. `E1`, `S8`.
 
 What is to be checked, from the parent stage and the additional HTTP-exit decision:
 
@@ -21,10 +21,10 @@ What is to be checked, from the parent stage and the additional HTTP-exit decisi
 - every built-in preset completes a handshake against the real service;
 - every failure is attributable: either the server or `dnstt-cli`.
 
-Two numbers are still preliminary and are settled here: the client keepalive timeout
-stands at the upstream 2 min, and `DefaultHandshakeTimeout` is 20 s. The exit has one open
-question of its own: whether `danted` takes the SOCKS5 greeting, login and request in one
-write, which saves two round trips per connection (R3).
+The timeouts are settled from the live measurements: keepalive 30 s, handshake 10 s,
+`degraded` 25 s. The `danted` question is answered: `danted` 1.4.4 takes the SOCKS5 greeting,
+login and `CONNECT` in one write, and `exit.one_write` ships off by default for `socks5`
+only (R3).
 
 Everything live — the server's domain and key, the exit login, the resolvers, addresses,
 logs and the course of the runs — stays in `doc/local/` and `doc/runs/`, outside git
@@ -100,10 +100,58 @@ Facts from the code at `base`, which the children take into account:
   CONNECT probe and the in-process `dnstt-cli` path through its local SOCKS5 listener; it
   does not claim that the upstream binary implements the exit protocol itself.
 - The three transports, the server restart, the network change, the dead-resolver check and
-  the presets have been seen live; the Windows run repeats what the Linux run showed.
+  the presets have been seen live on Linux; the Windows run is deferred until a machine is
+  available and is recorded as `not seen`, not counted as a pass.
 - The measured keepalive and handshake timeouts are set in the code.
 - The `danted` question is answered and, if it pays off, the exit setting exists.
 - The `network` resolver works in `connect` and `resolvers check` on Linux and Windows;
   unpinned resolver host names use the R5 bootstrap-server selection.
 - The results are recorded in this stage and in `architecture.md` without the environment,
   addresses or resolvers; the course of the runs stays in `doc/local/` (`AGENTS.md`).
+
+## Outcome
+
+The live acceptance ran on Linux in disposable containers. The SOCKS5 part is synthetic: a
+local `dnstt-server` with `t.example.com` and a generated key, a local `danted` 1.4.4 with one
+login, a fixed-body local target and headless Chromium; it is not the user's exit, server or
+network. The HTTP part ran against the user's real server: the HTTP CONNECT exit with Basic
+authentication, one DoH, one DoT and one public UDP resolver (the user supplied no own UDP
+resolver; the user's own UDP path is not proven). Windows is deferred until a machine is
+available and is `not seen`, not a pass.
+
+Synthetic SOCKS5 (S1–S4). The browser loaded the fixed target through the local SOCKS5
+listener; after a restart of the local server the session recovered in 52.8 s (25 s
+`degraded`, the 30 s keepalive, the stop/start and the redial) and new requests worked
+without restarting `connect`; a change of the client container's address in its own network
+namespace did not break the session (0 s, the SOCKS5 transport opens a per-query UDP socket),
+and the next requests worked. A clean SIGINT left no process or container; the host matched
+the baseline apart from other projects' Docker churn. No `dnstt-cli` defect was found.
+
+Real server, HTTP exit (R0–R10). The temporary profile loaded from the read-only mount and
+the control fetch outside the tunnel answered 200. Over DoH, DoT and UDP the browser loaded
+the target through the authenticated exit. The DoT browser phase's first fetch failed (empty
+DOM, no response headers) while the control through the same listener and `resolvers check`
+passed; the planned one-time `--disable-quic` recheck passed, the first failure is kept, and
+the side is the browser. Over DoH and the public UDP resolver the upstream `dnstt-client` and
+the in-process product each passed all attempts in the independent `compare`, every attempt
+200, with the first real application CONNECT authenticated; `connected` before it was
+readiness only. With a wrong password the exit answered 407, the supervisor stopped and did
+not retry it as a resolver failure. The dead-resolver check named the dead entry and exited
+1 when none passed; seven of eight built-in presets completed a handshake, the failing DoH
+preset is attributed to the resolver (both pinned 443 paths were open and the same resolver's
+DoT preset passed); all five `DefaultUTLS` labels completed a handshake through at least one
+DoH and one DoT preset. The real-server sessions were stopped with SIGINT, and the host check
+matched the baseline; the temporary profiles and stores were deleted.
+
+Recorded limits: the source-address change proof is indirect (the image has no `ip`/`ss`;
+the change was made inside the network namespace and the idle socket list was empty), the
+synthetic clean stop's SIGINT reached the `script` wrapper rather than the product (the
+product exited 0 and no process remained, but its own stop line is missing), and the host
+comparison is not literal because of other projects' Docker churn. The HTTP result does not
+replace the SOCKS5 acceptance, and the synthetic SOCKS5 result does not stand for the user's
+server, exit or network.
+
+The final timeouts are keepalive 30 s, handshake 10 s and `degraded` 25 s. The `danted`
+question is answered by the measured one-write exchange and the `exit.one_write` setting,
+off by default for `socks5` only. The results are recorded in `architecture.md`; the course
+of the runs and the raw values stay in `doc/local/` and `doc/runs/`.

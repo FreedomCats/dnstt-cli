@@ -70,8 +70,11 @@ transport → `DNSPacketConn` → KCP → Noise → smux, and returns a `Session
 handshake. The supervisor holds one session, opens streams in it and recreates it when it
 dies, when the network changes and when it switches resolvers.
 
-A dead session is noticed by the smux keepalive with a shorter timeout on the client side
-(about 30 s against the server's 10 s keepalives; the number is set by a live run, E1).
+A dead session is noticed by the smux keepalive with a 30 s client timeout, derived as 2.5×
+the worst measured healthy silence (~12 s over the measured transports) against the server's
+~10 s progress. smux checks the timeout once per its period, so silence is declared dead one
+to two periods (30–60 s) after the last data; recovery adds the redial, the backoff and the
+exit check.
 Connections open in a dead session break; new ones wait for the next session — the `socks`
 listener and the `tun` adapter live the whole `connect`.
 
@@ -268,7 +271,7 @@ type Config struct {
     UTLS             string   // upstream syntax of -utls; "" — DefaultUTLS, "none" — Go TLS
     Control          func(network, address string, c syscall.RawConn) error // R4
     LookupIP         func(ctx context.Context, host string) ([]netip.Addr, error) // R5
-    KeepAliveTimeout time.Duration // client smux timeout; 0 — upstream's 2 min
+    KeepAliveTimeout time.Duration // client smux timeout; 0 — upstream's 2 min; connect sets 30 s (R2)
     Logf             func(format string, args ...any) // the session's and its transports' messages
 }
 
@@ -300,9 +303,9 @@ func (s *Session) Close() error
   stays below `v1.8`: from `v1.8.0` a randomized hello may offer X25519MLKEM768 without a
   key share, and against a server that prefers it about one handshake in seven fails on
   the HelloRetryRequest.
-- The smux keepalive interval is the library's 10 s, or half the timeout if that is
-  shorter. smux checks the timeout once per its period, so a dead session ends between one
-  and two timeouts after the last data.
+- The smux keepalive sends every 10 s (or half the timeout if that is shorter) and checks
+  the 30 s timeout on its own 30 s period, so a dead session ends one to two periods
+  (30–60 s) after the last data.
 
 The exit sits on top: `exit.Dialer` turns a stream into a connection to `host:port`
 (SOCKS5 `CONNECT`, HTTP/1.1 `CONNECT`, SSH `direct-tcpip`). Datapaths see only
@@ -488,7 +491,8 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
 ```
 
 - **Dialing** — `core.Dial` with the next resolver of the list; the handshake has its own
-  timeout (20 s for now, to be measured on the live server). A timeout or error moves to
+  10 s timeout, derived as about 5.5× the slowest measured fresh handshake (~1.8 s) to cover
+  a cold bootstrap, and `resolvers check` uses the same value. A timeout or error moves to
   the next resolver at once; a full round without success — backoff `1·2^n` s up to 64 s,
   as in csqtt-cli.
 - **Connected** — a finished handshake and the exit readiness check. For `socks5`, every
@@ -505,7 +509,10 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
   less than a minute (R5) and waits the next backoff delay; one that lived longer clears
   the backoff and is redialed at once. The same resolver is tried first.
 - **Degraded** — no data from the server for 25 s (it sends a keepalive every 10 s); data
-  again — Connected. The core ends the session after its keepalive timeout.
+  again — Connected. 25 s is above the worst measured healthy silence and below the 30 s
+  keepalive, so `degraded` appears before the core ends the session, nominally 5 s before
+  the earliest detection, less the 5 s status poll; `reconnecting` comes later, once the
+  session ends.
 - **Streams between sessions** — the datapath opens streams through the supervisor, which
   waits for the next session until the datapath's deadline; once the tunnel stops, at
   once a refusal.
@@ -729,6 +736,6 @@ modes of `slipnet://`); export of `slipnet://`.
 | The narrow channel cannot carry all system traffic | high | `socks` as a full mode; lists past the tunnel later |
 | No UDP for apps (calls, games) | medium | said plainly in README; fast rejection for QUIC |
 | Anyone with the domain and key can use the server | medium | README recommends a login on the exit; `danted` with a password is the main case |
-| A dead session is noticed late | medium | shorter client keepalive (R2), measured in E1 |
+| A dead session is noticed late | medium | 30 s client keepalive (R2), one to two periods (30–60 s) after the last data |
 | An upstream update adds a socket outside the hook | low | the guard (§06) |
 | Antivirus reacts to an unsigned exe creating an adapter | medium | warning in README, release signing later |
