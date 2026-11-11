@@ -60,6 +60,10 @@ the user-run matrix and the record of its results.
    was fast; the diagnosis measured it on a local stand and in a quiet container A/B and
    closed without a defect — the cost is the tunnel's own capacity — so the fix was dropped.
    The retried browser/QUIC branch raised it. Stage; two children.
+7. [Browser through the TUN in a container](07-browser-container/plan.md) — the browser/QUIC
+   branch re-run in a quiet throwaway container with a headless browser, to tell a browser
+   path problem from the host's saturated session. The user authorized the Chromium fetch
+   inside the disposable container. Task.
 
 The runbook is prepared and reviewed before the user starts, so that a mistake in a command
 costs a line and not a wasted session. The matrix is then run in the user's time; the record
