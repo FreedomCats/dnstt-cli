@@ -1,6 +1,6 @@
 ---
 kind: task
-status: blocked
+status: in-progress
 depends: [01-runbook]
 detailed: true
 ---
@@ -34,10 +34,8 @@ checkout with cached dependencies (or a ready binary is used); the target is `<t
 
 ## Blocked
 
-The user's real values are not in chat yet: the domain, the public key, the HTTP login and
-password, one working DoH resolver and one working UDP resolver. The task resumes when the
-user supplies them; the coordinator writes them only into the ignored temporary profile and
-deletes them after the runs.
+The user supplied the values in chat; the run is in progress. They stay only in the ignored
+temporary profile and are deleted after the runs.
 
 ## Steps
 
