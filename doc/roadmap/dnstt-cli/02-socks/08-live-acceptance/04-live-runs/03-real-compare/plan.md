@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 depends: [01-runbook]
 detailed: true
 ---
@@ -34,8 +34,8 @@ checkout with cached dependencies (or a ready binary is used); the target is `<t
 
 ## Blocked
 
-The user supplied the values in chat; the run is in progress. They stay only in the ignored
-temporary profile and are deleted after the runs.
+None. The user supplied the values in chat; they lived only in the ignored temporary
+profile and were deleted after the runs.
 
 ## Steps
 
@@ -171,3 +171,61 @@ temporary profile and are deleted after the runs.
 - The temporary profile and store are deleted; the user's real profile and store were not
   read, statted or opened; no domain, key, address, resolver, login or date is in a
   tracked file; the clean stop and the host check pass.
+
+## Outcome
+
+The authenticated comparison passed on the user's real server, over one DoH resolver and
+one public UDP resolver, with the HTTP CONNECT exit and Basic authentication. One disposable
+client container from the local `debian:trixie` image ran the accepted `compare` tool with
+the temporary `real` profile mounted read-only; the upstream side was the `dnstt-client`
+built from the sibling checkout (`-client-bin`; its HEAD matches `core/CORE_VERSION`, and
+the host record stands in for the tool's skipped revision check), and the product side was
+the in-process `dnstt-cli` through its local SOCKS5 listener. The user's working example
+target replaced the task's default `https://example.com/`, and the control fetch confirmed
+it outside the tunnel.
+
+**R0.** The profile loaded from the read-only mount (`profile list` exited 0 and named it);
+a write under `/cfg` failed with `Read-only file system`; the control fetch from the
+container without the tunnel answered `200` with a non-zero body (13 B); a `find` for
+`profiles.toml` and `secrets.json` in the container showed only `/cfg/dnstt-cli/…`. The
+secret went to the file-backed store (`secrets.json, file with mode 0600`) through stdin,
+never an argument. The host's real profile and store were never mounted, opened or statted.
+
+**R5.** Over DoH both sides passed every attempt: upstream `PASS 3/3` and `dnstt-cli
+PASS 3/3`, six attempts of `200` with a 14 B body, verdict `OK`, exit 0; 1.07–1.42 s per
+attempt, the product handshake 187 ms. The supervisor's `idle -> dialing -> connected` came
+before the first attempt and is readiness only; the first real application CONNECT then
+opened the target and returned `200`, so the product verdict records a successful first real
+application CONNECT through the authenticated HTTP exit, not readiness. No 407 and no
+refusal appeared. The expected notes are recorded as notes, not failures: `-client-bin`
+leaves the upstream revision unverifiable; the upstream and dnstt-cli use different default
+uTLS distributions for DoH; the upstream resolves the resolver host name through system DNS
+and ignores pins. The verdict and both `PASS` lines were required, not the exit code alone.
+
+**R6.** Over UDP, with the same profile and only the resolver override changed, both sides
+again passed every attempt: upstream `PASS 3/3`, `dnstt-cli PASS 3/3`, six attempts of `200`
+with a 14 B body, verdict `OK`, exit 0; 1.10–1.32 s per attempt, the product handshake
+61 ms. The user supplied no UDP resolver; the first public one tried answered, and its
+address stays only in the private logs.
+
+The temporary profile, its file store and every copy of the password were deleted after the
+runs; a scan of `doc/runs` finds the password only in the ignored values file the run was
+given, which this task does not own. The client container was stopped and removed; no
+product process, published port or bridge from the run remains. The host record matches the
+baseline on the routes, the `/etc/resolv.conf` checksum, the links, the Docker objects, the
+image id and `git status`, differing only in its header line; the four private logs are
+under `doc/runs/logs` with the four transport/side names.
+
+Deviations and run notes: `SSL_CERT_FILE=/cacert.pem` was set for the `compare` exec as well
+as the control fetch, because the image ships no CA store and both the HTTPS target probe
+and the DoH transport verify certificates; the step's command lists it only for the control
+fetch. The system Go is older than `go.mod` requires, so the cached `go1.26.2` toolchain was
+used offline, as in the synthetic run; `GOPROXY=off` and `-mod=readonly` held. The control
+fetch is the run's standard-library artifact, and the run scripts are mode 0600, so the
+resolver entries and the target stay out of the host's shell history; the target host name
+appears in the tool's own terminal lines, which stay in the ignored evidence. The two user
+permissions for container-internal fetches were not used: this task installed nothing.
+
+No `dnstt-cli` defect was found, so no new child of the stage is opened. The browser
+transports R1–R4, the dead-resolver check and the presets R7–R8, the fingerprints R9, the
+real-server clean stop R10 and the Windows child W1 are other nodes and were not run.
