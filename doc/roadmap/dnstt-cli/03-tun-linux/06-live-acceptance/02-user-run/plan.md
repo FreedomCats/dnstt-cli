@@ -1,6 +1,6 @@
 ---
 kind: task
-status: blocked
+status: done
 detailed: true
 depends: [01-runbook, 04-recover-system-dns, 05-secret-service-helper, 06-tun-datapath-latency]
 ---
@@ -122,6 +122,15 @@ and no timeout; the seconds and timeouts above came from a session that was alre
 client), not from the datapath. The only measured ceiling is the tunnel's own shared channel,
 about 58 KB/s, which both datapaths share. No fix follows.
 
+The browser path itself was then measured in a quiet throwaway container
+([the container task](../07-browser-container/plan.md)): headless Chromium loaded all four
+phases — the control page by name and with a pinned address, a heavy page of about 821 KiB,
+and the control page with QUIC disabled — in 1.0–8.1 s at 15–102 KiB/s. The browser's DNS
+fan-out peaked at four queries in flight against the listener's 64, the exit answered 65 of
+65 concurrent CONNECTs, and every phase drained its streams back to zero. The browser path is
+therefore not the limit either; what remains is the real-machine part — IPv6/Happy Eyeballs
+and QUIC on the live network — which the container cannot exercise.
+
 The TUN runs take over the machine's routes and system DNS, as `tun` mode does by design. A
 retry's cleanup killed the `script` wrapper before `connect` could restore the system DNS,
 leaving the tunnel's dead address first in `/etc/resolv.conf`; connectivity stalled and an
@@ -130,7 +139,34 @@ unrelated `qwdtt-cli` process had to be killed. The leftover was removed with
 fresh request from the user; further live TUN work goes into a container with its own network
 namespace, with the host untouched.
 
-The choice is the user's: what to do with P5, and — if the browser still fails on a quiet
-session — which browser path to diagnose next (its IPv6/QUIC/DoH behaviour rather than the
-datapath). The filled checklist is `doc/local/runbook-tun-linux.md`, the raw evidence is in
-`doc/runs/tun-matrix/`; both stay outside git and carry no real value.
+The choice is the user's: how to settle P5, and whether the real-machine browser/QUIC check is
+still required before the matrix is accepted. The filled checklist is
+`doc/local/runbook-tun-linux.md`, the raw evidence is in `doc/runs/tun-matrix/`; both stay
+outside git and carry no real value.
+
+## Outcome
+
+The matrix has been run. Every check has a result; two are not seen, and the user accepted
+that gap for this acceptance.
+
+- P0, P1, P2, P3, P4 (partly), P6 and P7 are seen on the real Linux machine. The `kill -9`
+  run first left a dead resolver in the system DNS and the next start could not resolve the
+  DoH name; [04](../04-recover-system-dns/plan.md) fixed the recovery order and the re-run was
+  green. The keyring branch under `sudo` first failed with `unknown command`;
+  [05](../05-secret-service-helper/plan.md) wired the helper, and the re-run read the secret
+  and carried traffic.
+- P4: names resolve through the adapter, other UDP is refused at once, outward IPv6 is
+  blocked, and the browser path was measured in a quiet throwaway container
+  ([07](../07-browser-container/plan.md)): all four Chromium phases loaded, the browser's DNS
+  fan-out peaked at four queries, the exit answered 65 of 65 CONNECTs, and the streams drained
+  after every phase.
+- **P5, network change: not seen.** No second network was available to the agent, and changing
+  the link would cut the session. The code path is covered by unit tests only; the stage's
+  `Done when` line about a network change stays unproven by a live run. The user accepted this
+  gap.
+- **The live IPv6/Happy Eyeballs part of the browser branch: not seen.** The container is IPv4
+  only; the IPv4 QUIC fallback is covered by the container phases.
+- No failure is left pointing at the server, the exit or the network; the failures found were
+  fixed inside this stage. The raw evidence is in `doc/runs/tun-matrix/` and
+  `doc/runs/browser-container/`, the filled checklist in `doc/local/runbook-tun-linux.md`;
+  all outside git, and no value is in a tracked file.
