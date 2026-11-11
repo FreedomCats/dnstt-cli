@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 ---
 
@@ -94,3 +94,30 @@ address, resolver, login or date.
   container's address, the host-unchanged baseline and after-check.
 - Links and headings are consistent, English, `git diff --check` passes, no tracked file
   gained a live value, and no code, test or dependency changed.
+
+## Outcome
+
+The checklist is written in ignored `doc/local/runbook-socks-acceptance.md`, and the filled
+copy is `doc/local/runbook-socks-acceptance-filled.md`. Both are ignored by `git check-ignore`
+and are never force-added.
+
+The checklist covers the whole stage: S0 (environment and the one permission for both
+container-internal fetches), S1–S4 (the synthetic browser, the local server restart, the
+client container's address change, the clean stop and the host comparison), R0–R10 (the
+temporary real-server profile and the control fetch, DoH, DoT and UDP, the first-CONNECT
+authentication and the wrong-password 407, the comparison over DoH and UDP, the dead
+resolver, the eight presets, the five `DefaultUTLS` fingerprints, and the real-server clean
+stop and host check), and W1 (the blocked Windows part).
+
+The design follows the stage: the two-container synthetic setup, the browser and the product
+in one container with the loopback proxy, no local DoH or DoT, the restart with the same
+key, domain, port and upstream, the address change inside the client's own network namespace,
+the host baseline before and after. Every check has a `Result:` line with the `seen`,
+`not seen — <reason>` or `failed — <what happened>` form, the side and the evidence file; the
+result form has the per-run header and the `Check | Result | Side | Evidence | Notes` table,
+and the cleanup and publication rules are written.
+
+The values are placeholders only; the real ones are supplied in chat and written only to the
+ignored temporary profile. The evidence goes to `doc/runs/live-socks/<run-id>/`; the filled
+copy to `doc/local/`. No tracked file gained a live value, no code, test or dependency
+changed, and `git diff --check` passes.
