@@ -193,7 +193,7 @@ working resolver supplied, the container cannot reach it) is recorded as
     network or image change; `git status --short` shows only the roadmap node and ignored
     paths. External Docker churn from other projects is recorded as not the run's. Fill the
     cleanup line and R1–R4 in `doc/local/runbook-socks-acceptance-filled.md`, appending this
-    run to R0; leave R10 to the later real-server run, as the comparison did. A product
+    run to R0; R10 is filled at the stage level from this run. A product
     defect found here is not fixed in this node: it becomes a new child of the stage, named
     after the check that found it, with a test; the first failure is kept. No tracked file
     gains a domain, key, address, resolver, login, target or date; the Outcome uses the
@@ -279,7 +279,7 @@ removed; the temporary profiles, their file store and every copy of both passwor
 deleted; the host record matches the baseline on the routes, the `/etc/resolv.conf`
 checksum, the links, the Docker networks and the image id, and `git status --short` showed
 only this roadmap node, the only difference being another project's container age. `R10`
-remains with the later real-server run.
+is filled at the stage level from this run.
 
 Deviations and run notes: the system Go is older than `go.mod` requires, so the cached
 `go1.26.2` toolchain was invoked offline as in the comparison; `GOTOOLCHAIN=go1.26.2` with

@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: a787cd7
 depends: [02-live-run-script, 03-timeouts-and-danted]
 ---
@@ -71,12 +71,13 @@ These decisions are shared by the children; a child may add detail, not contradi
   tool as the task needs; the temporary profile is mounted read-only. The only network
   actions are the resolvers, the tunnel and the target `<target>` (default
   `https://example.com/`), which the exit resolves.
-- **Values.** The user's domain, public key, HTTP login and password, and DoH/DoT/UDP
+- **Values.** The user's domain, public key, HTTP login and password, and DoH and DoT
   resolver entries are supplied in chat and written only to an ignored temporary profile
   under `doc/runs/live-socks/` (mode 0700 for the directory, 0600 for the files), mounted
-  read-only and deleted after the real-server runs. They are never passed in an argument,
-  never logged, and never written to the roadmap, the journal or a tracked file. The
-  user's real profile and secret store are not read.
+  read-only and deleted after the real-server runs. A public UDP resolver stands in when
+  the user has none of their own. They are never passed in an argument, never logged, and
+  never written to the roadmap, the journal or a tracked file. The user's real profile and
+  secret store are not read.
 - **Permissions.** Every fetch inside a disposable container is requested explicitly
   before it happens, with its source named: Chromium and its minimal packages in the
   client container; the `danted` source archive, its build dependencies and the account
@@ -143,9 +144,11 @@ unfixed defect keeps the stage open; none is worked around silently.
   the local proxy loads the target page through the server-side HTTP CONNECT exit with
   Basic authentication. `Connected` before the first real application CONNECT is tunnel
   readiness only, and that CONNECT authenticates; a wrong password gives 407, stops the
-  supervisor and is not retried as a resolver failure. A missing working DoH, DoT or UDP
+  supervisor and is not retried as a resolver failure. A missing working DoH or DoT
   resolver supplied by the user is an unmet prerequisite, recorded as such, and keeps the
-  stage open.
+  stage open. UDP is different: when the user has no resolver of their own, a public
+  resolver is an acceptable substitute for the transport check, and the Outcome must say
+  that the user's own UDP path was not checked.
 - **Authenticated comparison.** Over a working DoH and a working UDP resolver the upstream
   tunnel plus the independent HTTP CONNECT probe and the in-process product both reach the
   target with Basic authentication, and all attempts pass; the product verdict records a
@@ -177,10 +180,13 @@ unfixed defect keeps the stage open; none is worked around silently.
   parent's goal; the published text must say that it is not the user's exit, server or
   network, and no wording may turn it into one.
 - **Values.** The user supplies the domain, public key, HTTP login and password, and the
-  working DoH, DoT and UDP resolver entries in chat when the real-server work starts. They
-  live only in the ignored temporary profile, are deleted after the runs, and never enter
-  an argument, a log or a tracked file. If a value is missing or refused, the task records
-  the item as `not seen — <reason>` and stops; there is no substitute.
+  working DoH and DoT resolver entries in chat when the real-server work starts. They live
+  only in the ignored temporary profile, are deleted after the runs, and never enter an
+  argument, a log or a tracked file. If a DoH or DoT value is missing or refused, the task
+  records the item as `not seen — <reason>` and stops; there is no substitute for the
+  user's own DoH or DoT path. For UDP, a public resolver is an acceptable substitute when
+  the user has none of their own: it proves the transport, and the Outcome states that the
+  user's own UDP path was not checked.
 - **Permissions.** Chromium and its packages in the client container, and the `danted`
   source archive, its build dependencies and account tooling in the server container, are
   fetched only inside disposable containers under an explicit permission recorded before
@@ -205,3 +211,61 @@ unfixed defect keeps the stage open; none is worked around silently.
 - **Host and containers.** Docker's veth pairs appear while a container runs; the
   after-check runs once the containers are removed. A leftover container, bridge, image
   pull or host process is a failure to record and clean, not a pass.
+
+## Outcome
+
+The stage was accepted on the final tree. The SOCKS5 datapath is synthetic and scoped to
+the local `dnstt-server`, the `danted` built from source, the fixed-body target and the
+container network; it is not the user's exit, server or network. The real-server runs used
+the user's server and its HTTP CONNECT exit with Basic authentication. The acceptance is
+Linux only: the Windows child is deferred and no Windows item is counted as seen.
+
+The checklist is `doc/local/runbook-socks-acceptance.md` (ignored), filled as
+`doc/local/runbook-socks-acceptance-filled.md`; S0–S4 and R0–R10 are `seen`, W1 is
+`not seen` by the user's deferral. The runbook and the done children are at `77796e9`,
+`bd835a5`, `c2c7db4`, `a07e33e` and `7ef8092`.
+
+**Synthetic SOCKS5 (S1–S4).** A headless Chromium through the local SOCKS5 listener loaded
+the target page. The local server restart and the client container's address change did not
+require restarting `connect`, and new fetches worked. The restart recovery was 52.8 s: the
+degraded state at the 25 s threshold, the unanswered keepalive at the 30 s keepalive, then
+the stop/start and the redial. The address change recovered in 0 s because the SOCKS5
+transport opens a UDP socket per query, so the session is not tied to the source address.
+The clean stop left no product process, listener, container, profile or secret; the host
+matched its pre-run record apart from external Docker churn recorded as not the run's.
+
+**Real server, HTTP exit (R0–R10).** The temporary profile loaded from the read-only mount
+and the control fetch passed. The browser loaded the target over DoH and UDP, and over DoT
+after the first fetch failed on the browser side (an empty DOM and no response headers; the
+control fetch through the same listener and the resolver check passed) and the planned
+`--disable-quic` recheck passed, with the first failure kept. The wrong password gave 407;
+the product printed the login error, stopped the supervisor and did not retry it as a
+resolver failure, and with the correct password the same exit returned 200. The comparison
+passed over DoH and UDP: upstream and in-process `dnstt-cli` both `PASS 3/3`, verdict `OK`,
+and the product verdict records the first real application CONNECT, not readiness. The dead
+resolver was named with its error in a mixed list, and a dead-only list exited 1. Seven of
+the eight presets completed a real handshake; the one failure is attributed to the resolver
+(both pinned 443 paths open, the same resolver's DoT preset and the other presets passing).
+All five `DefaultUTLS` labels completed a handshake through a DoH and a DoT preset. R10 is
+filled from the real-server transports run: the sessions stopped with SIGINT, exit 0, no
+process or listener, and the container, profiles and store removed.
+
+The UDP transport was checked over a public resolver: the user has no UDP resolver of their
+own and allowed a public one as the substitute for the transport check. The user's own UDP
+path was not checked; the DoH and DoT results are over the user's entries. The stage's
+`Done when` and `Risks` state this split.
+
+**Windows (W1).** Not seen: the user deferred the part until a Windows machine exists. The
+`blocked` child `06-windows` records the deferral, and the Linux acceptance is not described
+as both platforms.
+
+**Defects.** No `dnstt-cli` defect was found in the runs; the kept failures (the DoT browser
+fetch and the preset) are attributed to the browser and the resolver, and no child of the
+stage was opened for a defect. The recorded limits are the indirect source-address proof
+(the image has no `ip`/`ss`; the accepted address change did not break the session), the
+SIGINT reaching the `script` wrapper rather than the product (the product exited 0, its stop
+line is missing), and the external Docker churn in the synthetic host comparison.
+
+**Privacy.** The filled checklist and the raw logs are only in ignored `doc/local/` and
+`doc/runs/`; the temporary profiles and the stored secret were deleted; no domain, key,
+address, resolver, login, target, date or environment detail is in a tracked file.
