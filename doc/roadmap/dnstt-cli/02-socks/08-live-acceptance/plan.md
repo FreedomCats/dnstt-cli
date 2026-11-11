@@ -41,9 +41,9 @@ logs and the course of the runs — stays in `doc/local/` and `doc/runs/`, outsi
 3. [Timeouts and the `danted` question](03-timeouts-and-danted/plan.md) — the keepalive and
    handshake timeouts measured live and set in the code; whether `danted` takes the SOCKS5
    messages in one write, and the exit setting if it does. Stage.
-4. [Live runs](04-live-runs/plan.md) — the acceptance runs by the user from a checklist:
-   the three transports, a server restart, a network change, the dead-resolver check, the
-   presets, then the same on Windows. Stage.
+4. [Live runs](04-live-runs/plan.md) — the acceptance runs from a checklist in disposable
+   containers: a synthetic local SOCKS5 setup, the user's real server for the HTTP exit,
+   and the same on Windows when a machine is available. Stage.
 5. [Recording the results](05-record-results/plan.md) — the results in this stage and in
    `architecture.md`, without the environment, addresses or resolvers. Task.
 

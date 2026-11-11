@@ -1,82 +1,207 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: a787cd7
 depends: [02-live-run-script, 03-timeouts-and-danted]
 ---
 
 # Live runs
 
-The acceptance runs of the SOCKS5 datapath against the user's server, with the timeouts of
-[Timeouts and the `danted` question](../03-timeouts-and-danted/plan.md) in place. They
-cover the existing SOCKS5 server-side exit and the selected HTTP CONNECT exit. The agent
-cannot carry them out — a browser, a server restart, a network change, a Windows machine:
-the user runs them from a checklist, and every failure goes through `compare` of the
-[live-run tooling stage](../02-live-run-script/plan.md) before it is called a bug.
+The acceptance of the SOCKS5 datapath, moved from the user's checklist to the agent and
+disposable containers on this machine, with the final timeouts in place. The user's server
+has no SOCKS5 exit: the SOCKS5 datapath is accepted in a synthetic local setup, and the
+real server serves the HTTP CONNECT exit with Basic authentication. Every result says
+which of the two it comes from; a synthetic result never stands for the user's server,
+exit or network.
 
-The checklist is written with placeholders (`<profile>`, `t.example.com`, "the ISP
-resolver"); its filled copy, the outputs and the course of the runs are in `doc/local/`.
-A bug found here becomes a task of this stage, with its own test against the in-process
-server where one can be made.
+Scope:
 
-What the runs have to show:
+- **Synthetic SOCKS5.** A local `dnstt-server` built from the vendored `core/server`, with
+  `t.example.com` and a generated key; a `danted` 1.4.4 built from source with one login; a
+  fixed-body local target; the product's local SOCKS5 listener and a headless Chromium.
+  The local server is restarted and the client container's network is changed in the middle
+  of a session. This is not the user's exit, server or network.
+- **Real server, HTTP exit.** The user's server and its HTTP CONNECT exit with Basic
+  authentication, over working DoH, DoT and UDP resolvers: the browser through the local
+  proxy, the authenticated comparison with the upstream client and the independent HTTP
+  CONNECT probe, the dead-resolver check, the eight presets and the uTLS fingerprints. The
+  values are supplied in chat when the real-server work starts.
+- **Windows.** Deferred until a Windows machine is available; a `blocked` child. No Windows
+  item is counted as seen.
 
-- **Transports.** A browser set to the local proxy opens sites through the server's
-  SOCKS5 exit with a login, once with only a DoH resolver in the profile, once with only
-  DoT, once with only UDP.
-- **HTTP exit.** With `exit.type = "http"`, the local SOCKS5 proxy opens sites through
-  the server-side HTTP CONNECT service with Basic authentication. `compare` passes on the
-  upstream side through its independent HTTP CONNECT probe and gives a result for the
-  in-process `dnstt-cli` side over at least one working DoH resolver and one working UDP
-  resolver. For the in-process side, `Connected` before the first request means tunnel
-  readiness only; the first real application CONNECT must authenticate and carry the target.
-  A 407 stops the supervisor and is not retried as a resolver failure. The upstream result
-  is evidence for the tunnel plus helper probe, not a claim that the upstream binary
-  implements the HTTP exit protocol.
-- **Server restart.** `dnstt-server` restarted in the middle of a session: the session
-  comes back by itself, new connections work without restarting `connect`.
-- **Network change.** Wi-Fi to cable or another network in the middle of a session: the
-  same. In `socks` mode nothing tracks the network yet (`architecture.md` §12, E2), so the
-  old session ends by the keepalive timeout; the time to recover is noted against it.
-- **Dead resolver.** `resolvers check` on a list with a resolver that does not answer:
-  it is named with its error, the others pass; on a list of dead resolvers only, the exit
-  code is 1.
-- **Presets.** `resolvers check` on a profile with all eight presets: each completes a
-  handshake or its failure is attributed. Each fingerprint of `client.DefaultUTLS`
-  (through the profile's `utls`) completes a handshake through at least one DoH and one
-  DoT preset — left open by the core patches (S1, P5).
-- **Windows.** The same SOCKS5 datapath checks on Windows, plus the selected HTTP exit
-  scenario with the exit password stored there by the tool's `secret`.
+The timeouts are final: keepalive 30 s, handshake 10 s, degraded 25 s
+(`internal/supervisor/tunnel.go`); the restart and network-change recovery times are read
+against them. The comparison is the accepted `doc/runs/_live/` tool. The synthetic setup
+and its launcher follow the
+[synthetic `danted` check](../03-timeouts-and-danted/08-synthetic-danted/plan.md); the
+browser container follows the
+[TUN browser task](../../../03-tun-linux/06-live-acceptance/07-browser-container/plan.md).
+
+## Run design
+
+These decisions are shared by the children; a child may add detail, not contradict them.
+
+- **Containers.** `debian:trixie` (local; `--pull=never`), no `--network host`, no
+  published ports, no `docker network create`. The default bridge only. The host's routes,
+  DNS, firewall and interfaces are not changed; the only host-side writes are builds into
+  the ignored `build/out/`, the ignored profile and evidence files under `doc/runs/`, and
+  the ignored checklist under `doc/local/`.
+- **Browser and proxy.** The browser and the product share one client container. The
+  product listens on `127.0.0.1:<local-port>`; Chromium starts with
+  `--proxy-server="socks5://127.0.0.1:<local-port>"`. The browser resolves the target at
+  the exit (SOCKS5 remote DNS); no host proxy and no published port. The same holds for
+  the synthetic and the real-server runs.
+- **Synthetic topology.** Two containers on the default bridge. Server container:
+  `dnstt-server`, `danted`, the target. Client container: the product and Chromium. The
+  profile's only resolver is `udp:<server-ip>:<port>`, a direct local resolver; no local
+  DoH or DoT servers are built, because the three transports are the real-server task,
+  where the user's resolvers exist.
+- **Restart.** The local `dnstt-server` is stopped and started again with the same key,
+  domain, port and upstream while `connect` stays up. The session dies and is redialed by
+  the supervisor; a new fetch is the evidence.
+- **Network change.** The client container's address changes inside its own network
+  namespace, on the same bridge and with the same server address in the profile. The old
+  session's source address disappears and the next dial uses the new one. This is the
+  closest local equivalent of a Wi-Fi-to-cable change for `socks` mode, which has no
+  network tracking and recovers through the keepalive; it is not a physical link change
+  and says nothing about the user's networks. Moving the client to a second bridge was
+  rejected: the server address would change with it, which would replace the network
+  change with a server-address change.
+- **Real-server runs.** One client container with the product, Chromium and the comparison
+  tool as the task needs; the temporary profile is mounted read-only. The only network
+  actions are the resolvers, the tunnel and the target `<target>` (default
+  `https://example.com/`), which the exit resolves.
+- **Values.** The user's domain, public key, HTTP login and password, and DoH/DoT/UDP
+  resolver entries are supplied in chat and written only to an ignored temporary profile
+  under `doc/runs/live-socks/` (mode 0700 for the directory, 0600 for the files), mounted
+  read-only and deleted after the real-server runs. They are never passed in an argument,
+  never logged, and never written to the roadmap, the journal or a tracked file. The
+  user's real profile and secret store are not read.
+- **Permissions.** Every fetch inside a disposable container is requested explicitly
+  before it happens, with its source named: Chromium and its minimal packages in the
+  client container; the `danted` source archive, its build dependencies and the account
+  tooling in the server container. `--pull=never`; no other package source; nothing on the
+  host. A refused permission or a missing container runtime stops the task and is
+  reported; it does not fall back to a host run or a fixture result for the user's exit.
+- **Host unchanged.** Before the first container and after the last one, record the IPv4
+  and IPv6 routes, the `sha256sum` of `/etc/resolv.conf`, `ip -br link`, `docker ps -a`,
+  `docker network ls`, the image ids and `git status --short`. The default route and the
+  resolver file must match; no container, bridge, `dnstt-cli` process or interface from
+  the runs may remain; the image ids must be unchanged; `git status` may show only the
+  roadmap node and ignored paths. Docker's own veth pairs exist only while the containers
+  run; the pre-existing Docker objects are recorded and not touched.
+- **Evidence.** The checklist is `doc/local/runbook-socks-acceptance.md` (ignored), filled
+  as `doc/local/runbook-socks-acceptance-filled.md`. Each check keeps its raw log or dump
+  under `doc/runs/live-socks/<run-id>/` and one line in the filled checklist: `seen`,
+  `not seen — <reason>` or `failed — <what happened>`, with the side (server, exit,
+  resolver, network, product). Neither the line nor a tracked file carries a value,
+  address, resolver, login or date.
+
+## Children
+
+1. [Runbook and evidence form](01-runbook/plan.md) — the checklist with placeholders and the
+   result form in ignored `doc/local/`. Task; documentation only, detailed.
+2. [Synthetic SOCKS5 exit](02-synthetic-socks5/plan.md) — the local server, `danted`, target
+   and browser; the restart and the container network change; the clean stop and the
+   host-unchanged proof. Task.
+3. [Authenticated comparison](03-real-compare/plan.md) — `compare` against the real server
+   over a working DoH and a working UDP resolver: the upstream tunnel plus the independent
+   HTTP CONNECT probe and the in-process product, with the first real application CONNECT
+   authenticated. Task.
+4. [Real-server transports](04-real-transports/plan.md) — a headless browser through the
+   local proxy and the real HTTP exit over DoH, DoT and UDP; the wrong-password 407. Task.
+5. [Resolvers, presets and fingerprints](05-resolver-matrix/plan.md) — the dead-resolver
+   check, the eight presets and the `DefaultUTLS` fingerprints through DoH and DoT. Task.
+6. [Windows](06-windows/plan.md) — the same matrix on Windows when a machine is available.
+   Stage, `blocked` by the user's decision.
+
+The checklist comes first because every run records into it. The synthetic setup is
+self-contained and comes before the real-server runs: it proves the container and browser
+tooling and the reconnection path without the user's values. The comparison comes before
+the browser transports so that a browser failure has an attributable baseline; the
+resolver matrix needs only the domain and key and can run once the real server is
+reachable. The Windows child is not a prerequisite of the Linux evidence.
+
+A defect found by any child becomes a new task of this stage, named after the check that
+found it; it is fixed with a test when a test can express it, and the check is rerun. An
+unfixed defect keeps the stage open; none is worked around silently.
 
 ## Done when
 
-- Every item above has been seen on Linux and on Windows, or its failure is attributed by
-  `compare` and either fixed in a task of this stage or written down as the server's,
-  exit's or network's.
-- Over a working DoH resolver and a working UDP resolver, the upstream tunnel plus the
-  independent HTTP CONNECT probe reaches the target using Basic authentication, and the
-  in-process `dnstt-cli` verdict records a successful first real application CONNECT rather
-  than tunnel readiness alone. Repeat this selected HTTP scenario on both platforms. A
-  wrong-password 407 stops `connect` without a resolver retry and is recorded as the final
-  exit-login result. An upstream listener-ready or Noise-only result, a local selftest, or
-  an attributed upstream failure does not close this authenticated-comparison gate.
-- Existing SOCKS5 runs remain required; their absence is not an HTTP success and is recorded
-  as an unmet prerequisite. HTTP success does not answer the `danted` question.
-- Bugs of `dnstt-cli` found in the runs are fixed and committed, each with a test.
-- The filled checklist, outputs and course are in `doc/local/`; nothing of them is in a
-  file of the repository.
+- The checklist exists in ignored `doc/local/` and is filled from the runs: every item
+  below is `seen`, `not seen — <reason>` or `failed — <what happened>`, with its side.
+- **Synthetic SOCKS5.** In the disposable local setup a headless Chromium through the
+  local SOCKS5 listener loads the target page; the connection recovers after a restart of
+  the local `dnstt-server` and after a network change of the client container, new
+  requests work without restarting `connect`, and the recovery times are recorded against
+  the 30 s keepalive and the 25 s degraded threshold. The clean stop leaves no process,
+  adapter, container, temporary profile or secret; the host's routes, `/etc/resolv.conf`,
+  links, Docker objects and `git status` match the pre-run record, with no new bridge,
+  published port or host process. The published text states that this is a synthetic
+  setup, not the user's exit, server or network.
+- **Real server, HTTP exit.** Over each of DoH, DoT and UDP a headless Chromium through
+  the local proxy loads the target page through the server-side HTTP CONNECT exit with
+  Basic authentication. `Connected` before the first real application CONNECT is tunnel
+  readiness only, and that CONNECT authenticates; a wrong password gives 407, stops the
+  supervisor and is not retried as a resolver failure. A missing working DoH, DoT or UDP
+  resolver supplied by the user is an unmet prerequisite, recorded as such, and keeps the
+  stage open.
+- **Authenticated comparison.** Over a working DoH and a working UDP resolver the upstream
+  tunnel plus the independent HTTP CONNECT probe and the in-process product both reach the
+  target with Basic authentication, and all attempts pass; the product verdict records a
+  successful first real application CONNECT, not readiness alone. An upstream
+  listener-ready or Noise-only result, a local selftest, or an attributed upstream failure
+  does not close this gate.
+- **Dead resolver.** `resolvers check` on a list with a resolver that does not answer
+  names it with its error and the others pass; on a list of dead resolvers only, the exit
+  code is 1.
+- **Presets and fingerprints.** Each of the eight presets completes a handshake against the
+  real service or its failure is attributed to the resolver or the network; each
+  fingerprint of `client.DefaultUTLS` completes a handshake through at least one DoH and
+  one DoT preset, or its failure is attributed.
+- **Windows.** The `blocked` child records the deferral; no Windows item is counted as
+  seen, and the Linux acceptance is not described as both platforms.
+- **Defects.** Every `dnstt-cli` defect found in the runs is fixed and committed with a
+  test; a defect that cannot be expressed in-process is named with the live check as its
+  regression. No defect is left unfixed without an open child of this stage.
+- **Privacy.** The filled checklist, the raw logs and the values are only in ignored
+  `doc/local/` and `doc/runs/`; the temporary profile and the stored secret are deleted;
+  no domain, key, address, resolver, login, date or environment detail is in a tracked
+  file.
 
 ## Risks and what is needed from the user
 
-- Needed from the user: the server and the right to restart it, two networks for the
-  change, a Windows machine, a profile selecting the HTTP exit with Basic credentials,
-  and the resolvers that pass in their network. An available SOCKS5 exit is needed for
-  the existing SOCKS5 matrix; the HTTP scenario does not require relabeling it as SOCKS5.
-- The network-resolver task, the HTTP exit integration and the live-run tooling must be
-  complete before these runs; include `network` and an unpinned resolver hostname in the
-  resolver checks. Do not write the user's profile or credentials into the checklist or
-  roadmap.
-- A network that lets none of the transports through makes it a design problem, not an
-  acceptance run: name it when it happens.
-- If recovery after a network change takes too long for the keepalive alone, the remedy is
-  network tracking in `socks` mode, which the architecture puts into E2: a question to the
-  user, not a quiet addition.
+- **Scope.** The SOCKS5 result is synthetic, and the restart and the network change happen
+  on the local server and inside the client container, not on the user's server or
+  network. The synthetic setup is the user-chosen substitute for the SOCKS5 part of the
+  parent's goal; the published text must say that it is not the user's exit, server or
+  network, and no wording may turn it into one.
+- **Values.** The user supplies the domain, public key, HTTP login and password, and the
+  working DoH, DoT and UDP resolver entries in chat when the real-server work starts. They
+  live only in the ignored temporary profile, are deleted after the runs, and never enter
+  an argument, a log or a tracked file. If a value is missing or refused, the task records
+  the item as `not seen — <reason>` and stops; there is no substitute.
+- **Permissions.** Chromium and its packages in the client container, and the `danted`
+  source archive, its build dependencies and account tooling in the server container, are
+  fetched only inside disposable containers under an explicit permission recorded before
+  the fetch. `--pull=never`; no host install; a refusal stops the task.
+- **The user's server.** It has an HTTP proxy, not a SOCKS5 service. The HTTP scenarios
+  depend on its CONNECT support, its Basic credentials and its egress to the target; a
+  refusal is attributed to the exit, not to the product without the comparison.
+- **Resolvers.** A DoH, DoT or UDP resolver that does not work in the user's network is an
+  unmet prerequisite, not a pass. The presets use public resolvers and need container
+  egress; a preset failure is attributed to the resolver or the network with its output.
+- **Flakiness and attribution.** The comparison requires all attempts to pass; the first
+  failure is kept, not rerun until it passes. A failure is called a bug only after the
+  independent probe or a control names the side.
+- **The browser.** Headless Chromium has no display and no IPv6; the result is about this
+  browser and page set, not the user's browser. A browser failure is checked with a pinned
+  fetch and a no-DNS control.
+- **Windows.** Deferred; the `blocked` child carries it and no Windows claim is made. The
+  parent stage's Windows requirement stays open until that child runs.
+- **Defects.** A fix is a new child of this stage with a test; a test that cannot be
+  expressed in-process is named and the live check is rerun. No silent workaround and no
+  partial fix left without a node.
+- **Host and containers.** Docker's veth pairs appear while a container runs; the
+  after-check runs once the containers are removed. A leftover container, bridge, image
+  pull or host process is a failure to record and clean, not a pass.

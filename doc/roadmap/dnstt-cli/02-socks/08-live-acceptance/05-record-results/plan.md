@@ -21,10 +21,12 @@ that identifies the user, and the preliminary notes removed. `E1`, `S8`; `AGENTS
 - The parent stage: its "Open points" lose the two timeout items, and the item about
   uTLS fingerprints left by S1 is closed or restated.
 - This stage's `Outcome`: what was seen live, per item of [Live runs](../04-live-runs/plan.md),
-  on each platform, separately for SOCKS5 and HTTP exits; what failed and on which side;
-  what was left open and why. Distinguish the upstream tunnel-plus-independent-helper
-  result from the in-process product result. HTTP success does not answer the SOCKS5
-  `danted` question or replace its existing acceptance requirements.
+  separately for the synthetic SOCKS5 setup and the real-server HTTP exit; the platform
+  that ran, with the deferred Windows part stated as not seen; what failed and on which
+  side; what was left open and why. Distinguish the upstream tunnel-plus-independent-helper
+  result from the in-process product result. The synthetic SOCKS5 result does not stand
+  for the user's server, exit or network, and HTTP success does not replace the SOCKS5
+  acceptance.
 - Code comments that still call a number preliminary or point at "the live acceptance
   task".
 
