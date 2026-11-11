@@ -81,3 +81,47 @@ pass without it.
 - `README.md` says what leaks in `tun` and what does not; the architecture holds the final
   values if any changed.
 - The evidence is recorded outside git; this node carries only the substance.
+
+## Outcome
+
+The matrix was accepted with two lines not exercised, and the user accepted that gap. P0–P4,
+P6 and P7 are seen on the real Linux machine; P5 (network change) and the live
+IPv6/Happy-Eyeballs part of the browser branch are not.
+
+- **P0.** The build, the real profile, the baseline, the non-root refusal and the
+  `sudo`/keyring path are seen. The system DNS method is `resolvconf`; the keyring path first
+  failed and works after [the helper fix](05-secret-service-helper/plan.md).
+- **P1.** A session came up with the adapter, the two `/1` routes, the `inet dnstt-cli` table
+  with a netlink owner and the adapter as system DNS; `curl` through the exit answered 200,
+  the resolver section showed the exit's answer, the lock was held, and a clean stop restored
+  the system DNS.
+- **P2.** After `kill -9` the adapter, routes, table and lock disappeared, but the system-DNS
+  record remained and the next start first could not resolve the DoH name.
+  [The recovery fix](04-recover-system-dns/plan.md) moves the removal right after the
+  adapter reservation, before the first session; the re-run printed the removal line,
+  established a session and answered 200, and the clean stop left no record.
+- **P3.** The locked state, `-no-kill-switch` and `kill_switch = false` behave as §05a says;
+  the §05a exceptions were seen. `-allow-leak` was covered in the container, because the
+  machine has no `nft`.
+- **P4.** Names resolve through the adapter, a connected public UDP send is refused at once,
+  and outward IPv6 is blocked. The browser branch was measured in a quiet throwaway container
+  ([the container task](07-browser-container/plan.md)): all four headless Chromium phases
+  loaded, the browser's DNS fan-out peaked at four queries, the exit answered 65 of 65
+  CONNECTs, and streams drained after every phase. The earlier host failure was a saturated
+  session with a neighbouring tunnel client, not a defect in the browser path.
+- **P5 — not exercised.** No second network was available to the agent, and changing the link
+  would cut the session; the code path is covered by unit tests only. The user accepted the
+  gap.
+- **The live IPv6/Happy-Eyeballs part — not exercised.** The container is IPv4 only; the IPv4
+  QUIC fallback is covered.
+- **P6.** The effective `rp_filter` was 2; forcing 1 made `connect` refuse with the sysctl
+  hint, exit 1 and leave no adapter or table; the value was restored.
+- **P7.** A second instance was refused by the lock while the first ran, and the lock was
+  free after it stopped.
+
+The failures found point at `dnstt-cli` alone and were fixed inside this stage (children 4 and
+5); none is left open. What stays recorded as a limit, not a defect: the tunnel's shared
+capacity (about 58 KB/s, the same for both datapaths) and the DNS listener's gate of 64
+exchanges in flight; the browser's fan-out stayed far below both. The evidence is in
+`doc/runs/tun-matrix/` and `doc/runs/browser-container/`, the filled checklist in
+`doc/local/runbook-tun-linux.md`; all outside git, and no value is in a tracked file.

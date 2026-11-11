@@ -323,19 +323,22 @@ ASSOCIATE`, no session) gets a refusal at once. The listener opens before the fi
 session, so a busy port is found out before connecting.
 
 **`tun`, common.** Routes `0.0.0.0/1` and `128.0.0.0/1` into the adapter, the original
-gateway untouched. The adapter has a private `/32` address chosen by the shell and MTU
-1500. Packets go to gVisor netstack in the shell: TCP → `exit.Dialer` to the original
-destination, UDP :53 → DNS over TCP (R7), other UDP and IPv6 — rejected. DNS protection
-and kill-switch are the csqtt-cli ones (`linuxsys.DNSGuard`, `winsys` WFP filters) with the
-adapter's DNS address as the only allowed resolver; the core's sockets pass by mark or app
-ID (R4). Between sessions the adapter stays, and with the kill-switch the system traffic is
-closed until the next session is up.
+gateway untouched. The adapter is a point-to-point pair of private `/32` addresses: the host
+end `10.66.67.2/32` with its peer `10.66.67.1/32`, MTU 1500. `10.66.67.1` is the netstack's
+only tunnel address, the DNS listener's address and the system DNS. Packets go to gVisor
+netstack in the shell: TCP → `exit.Dialer` to the original destination, UDP :53 → DNS over
+TCP (R7), other UDP and IPv6 — rejected. DNS protection and kill-switch are the csqtt-cli
+ones (`linuxsys.DNSGuard`, `winsys` WFP filters) with the adapter's DNS address as the only
+allowed resolver; the core's sockets pass by mark or app ID (R4). Between sessions the
+adapter stays, and with the kill-switch the system traffic is closed until the next session
+is up.
 
 **`tun` on Linux.** `/dev/net/tun` with `IFF_TUN | IFF_NO_PI`, the descriptor read by
 netstack in the shell (no handover to a core process). Second instance — refused by an
 abstract socket. System DNS — the csqtt-cli three ways (systemd-resolved, resolvconf,
-`resolv.conf`), leftovers of a killed run recovered on the next start. Strict `rp_filter`
-on the physical interface — refusal with a hint, as in csqtt-cli.
+`resolv.conf`); a leftover of a killed run is removed right after the adapter is reserved,
+before the first session, so a resolver given by host name can still be reached. Strict
+`rp_filter` on the physical interface — refusal with a hint, as in csqtt-cli.
 
 **`tun` on Windows.** Wintun through `golang.zx2c4.com/wireguard/tun` with a fixed GUID,
 `wintun.dll` next to the exe, the rest as in csqtt-cli §05 and §09a.
@@ -524,7 +527,9 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
 netlink without `ip` and `nft`, nftables table `inet dnstt-cli` with the `owner` flag (it
 disappears with the process), kill-switch as a second rule set of the same table — all from
 csqtt-cli §09b. One difference: the mark is set by the shell on its own sockets, there is
-no second process.
+no second process. Under `sudo` the keyring is reached through a hidden helper command that
+talks to the invoking user's Secret Service, so a profile with a `secretservice:` reference
+works without exporting the password.
 
 **Windows.** Administrator, a mutex against a second instance, WFP in a dynamic session (the
 filters disappear with the process), `wintun.dll` next to the exe — from csqtt-cli §09a,
