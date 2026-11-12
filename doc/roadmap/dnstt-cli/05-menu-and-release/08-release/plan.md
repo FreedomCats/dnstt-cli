@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 depends: [04-slipnet-import, 05-menu, 06-elevation, 07-license]
 ---
@@ -165,3 +165,76 @@ What is needed from the user:
 - the first workflow run is theirs: a `v*` tag or a `release/**` branch push, or a manual
   dispatch, and publishing the draft is manual;
 - the architectures are `linux/amd64` and `windows/amd64`; more are a later decision.
+
+## Outcome
+
+Done: the release machinery is in place, and a local `scripts/release` run produces both
+archives and passes `distcheck`, `sha256sums` and `sha256sum -c`.
+
+- `scripts/internal/dist/dist.go` is the one list of what an archive holds: the executable
+  for the platform, the Wintun pair for Windows, then `README.md`, `LICENSE`, `COPYING`,
+  `THIRD_PARTY_NOTICES.txt` and `dnstt-cli.example.toml`. `release` copies it and
+  `distcheck` compares against it, so the two cannot drift.
+- `scripts/notices` writes `THIRD_PARTY_NOTICES.txt` for both platforms at once: the union
+  of `go list -deps -json ./cmd/dnstt-cli` for `linux/amd64` and `windows/amd64` with
+  `CGO_ENABLED=0`, the Go standard library and runtime first (`LICENSE` and `PATENTS` from
+  `GOROOT`), then the modules sorted by path, then the shell's MIT and the core's CC0. The
+  file is committed, has 35 sections and regenerates byte for byte; the text is LF on every
+  system and carries no toolchain version, no `GOROOT` and no machine path, so the CI check
+  `git diff --exit-code` holds.
+- `scripts/release` builds `linux/amd64` and `windows/amd64` with `CGO_ENABLED=0`,
+  `-trimpath` and the version and commit through `-ldflags`, fetches `wintun.dll` 0.14.1
+  itself through `scripts/internal/wintun` with the archive hash checked, and writes the
+  `tar.gz` and the `zip` in Go with a fixed timestamp, the archive's directory in every
+  entry name, `/` separators in the zip, 0755 for the Linux binary and 0644 for the rest.
+  At the end it runs the host binary's `version` and fails if the version or the commit did
+  not arrive. `-nozip` leaves the directories only; `-wintun-archive` builds offline and
+  gives byte-identical archives.
+- `scripts/distcheck` takes the platform from the archive's extension and the version from
+  its name, and fails on a missing file, an extra file, a missing `wintun.dll` or its
+  license, an entry outside the archive's directory, a backslash, a wrong executable bit, a
+  non-PE or wrong-machine Windows exe and a binary whose `version` still says `dev`. The
+  Linux binary is unpacked and run (`version`, `help`, and no arguments with redirected
+  stdin and stdout); the Windows exe is only read.
+- `scripts/releasenotes` writes the download block — Windows, Linux, sources, checksums —
+  with the tag taken from the archive names; mixed versions, no archives and a missing
+  `SHA256SUMS.txt` are errors and nothing dated is written.
+- `.github/workflows/release.yml` runs `windows.yml` and `linux.yml` through their
+  `workflow_call`, builds and checks the archives with the scripts, regenerates the notices
+  and fails on a stale file, uploads the archives, `SHA256SUMS.txt` and the notes, and makes
+  a draft release only on a `v*` tag push, with `contents: write` kept to that job, which
+  runs no repository code. Actions are pinned by commit hash.
+- `README.md` drops the "in development" line and states what the program does now, the
+  platform matrix, the archive contents, `SHA256SUMS.txt`, `wintun.dll` next to the exe and
+  the licenses. The leak matrix is unchanged.
+
+Decisions inside the plan's freedom:
+
+- `-platforms` refuses any target but `windows/amd64` and `linux/amd64`: another Windows
+  architecture would silently get an amd64 `wintun.dll`, and more architectures are a later
+  decision anyway.
+- The license label of a module is the license whose text comes first in its license file,
+  not the first branch of a classifier. That corrected `github.com/klauspost/compress`
+  from `Apache-2.0` to `BSD-3-Clause`: its `LICENSE` starts with the module's BSD-3-Clause
+  text, and the Apache-2.0 and MIT parts belong to subpackages. No other label changed.
+- The Windows line of the release notes says "socks mode; tun is not available yet"; it goes
+  away with `04-tun-windows`.
+- The README's macOS row says the code builds and is not checked live, and claims no CI
+  build: no CI job builds `darwin` today, although `doc/architecture.md` §09 says "builds in
+  CI". The document is outside this task.
+
+Checks on the final tree: `go test ./scripts/...`; `go build ./...`; the CI vet split on
+Linux (with `core/`'s own setting) and with `GOOS=windows`; the full
+`go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and
+the four live `netguard` tests excluded by `-skip`, so no live call was made; the Windows
+cross-build; `git diff --check`. The local run
+`scripts/release -version v0.0.0-test` → `distcheck` (exit 0, the Linux binary ran) →
+`sha256sums` → `sha256sum -c` (both files OK) → `releasenotes`; the archives were compared
+byte for byte between a network fetch and `-wintun-archive`; `dist/` stays ignored.
+
+Not done here, on purpose: the first workflow run, the tag, the push and publishing the
+draft are the user's; the Windows archives are cross-built and their exe is never run, so
+nothing claims a Windows run.
+
+Also noticed, outside the task: `doc/architecture.md` §09's macOS "builds in CI" is not
+true today — no CI job builds `darwin`.

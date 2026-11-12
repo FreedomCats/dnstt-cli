@@ -1,0 +1,134 @@
+# Release: tests on Windows and Linux, the release built by scripts/release, and a draft
+# GitHub release with the archives, SHA256SUMS.txt and the "Download" block in the
+# description.
+#
+# A v* tag push builds and makes the draft release with that tag; publishing the draft is
+# done by hand on the Releases page. A push to a release/… branch and a manual run
+# (workflow_dispatch, even on a tag) only build: the archives stay an artifact of the run
+# and no release is created. The branch is for a trial build without a tag.
+#
+# The release is built on Linux: linux/amd64 natively and windows/amd64 by cross-build,
+# both with CGO_ENABLED=0, so no Windows machine is involved and nothing claims a Windows
+# run. wintun.dll is fetched by scripts/release itself — the pinned archive with its
+# SHA-256 checked — so nobody puts a zip next to an unpacked release. Every archive is
+# checked by scripts/distcheck, which also runs the Linux binary.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+    branches: ['release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/windows.yml
+
+  test-linux:
+    uses: ./.github/workflows/linux.yml
+
+  build:
+    needs: [test, test-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      # Actions are pinned by commit hash: a tag can be moved.
+      # The whole history with tags: without it git describe in scripts/release does not
+      # find the tag when the build has no -version.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # THIRD_PARTY_NOTICES.txt is committed and is copied into the archives as it is: a
+      # stale copy would ship the wrong license list, so a difference fails the build.
+      - name: Third-party notices
+        run: |
+          go run ./scripts/notices -dest .
+          git diff --exit-code -- THIRD_PARTY_NOTICES.txt
+
+      # On a tag the version is the tag itself: the archive names and the links in the
+      # release description are built from it.
+      - name: Build
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            go run ./scripts/release -version "$GITHUB_REF_NAME"
+          else
+            go run ./scripts/release
+          fi
+
+      # The archive holds what a user needs to start: the binary, the documents, the
+      # licenses, and wintun.dll on Windows. A file that fell out means there is no
+      # release.
+      - name: Archive content
+        run: go run ./scripts/distcheck -dir dist
+
+      - name: SHA256SUMS.txt
+        run: go run ./scripts/sha256sums -dir dist
+
+      # The beginning of the description — links in the order Windows, Linux, sources,
+      # checksums: the list of assets on GitHub is sorted alphabetically, and the order is
+      # set only by the description above it. The file is outside dist, or it would go into
+      # the release as an asset.
+      - name: Release notes
+        run: go run ./scripts/releasenotes -dir dist -repo "$GITHUB_REPOSITORY" -out release-notes.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  # The right to write belongs to this job only: it runs no code of the repository and no
+  # downloaded code, it only uploads the ready archives. A workflow_dispatch run, even on a
+  # tag, builds artifacts only: the release is made by a tag push.
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
+          path: notes
+
+      # The description is the "Download" block from the build, with what changed below it
+      # (--generate-notes adds its own part after --notes-file).
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file notes/release-notes.md \
+            --generate-notes
