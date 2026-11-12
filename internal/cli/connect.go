@@ -356,6 +356,16 @@ func isTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// isTerminalReader is isTerminal for the input side: it decides whether a command can ask
+// a person a question on stdin.
+func isTerminalReader(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
 // statusTransitions decides whether the run has a status line and returns the channel it
 // reads and the callback for the supervisor. Only a terminal has a status line; without
 // one nothing reads the transitions, so no callback is installed and a run under systemd

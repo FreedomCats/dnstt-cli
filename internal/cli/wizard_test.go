@@ -693,56 +693,6 @@ func TestWizardPutFailureDoesNotSave(t *testing.T) {
 	}
 }
 
-func TestValidProfileName(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		want bool
-	}{
-		{"home", true},
-		{"work-2", true},
-		{"2home", true},
-		{"a", true},
-		{"", false},
-		{"-home", false},
-		{"home/1", false},
-		{"home name", false},
-		{"home.", false},
-		{"høme", false},
-	} {
-		if got := validProfileName(tc.name); got != tc.want {
-			t.Errorf("validProfileName(%q) = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestValidDomainName(t *testing.T) {
-	for _, tc := range []struct {
-		domain string
-		ok     bool
-	}{
-		{"t.example.com", true},
-		{"t.example.com.", true},
-		{"T.Example2.COM", true},
-		{"localhost", true},
-		{"", false},
-		{".", false},
-		{"t..example.com", false},
-		{"-t.example.com", false},
-		{"t-.example.com", false},
-		{"bad_domain.example.com", false},
-		{strings.Repeat("a", 64) + ".example.com", false},
-		{strings.Join([]string{"a", "b", "c", "d"}, ".") + "." + strings.Repeat("x", 250), false},
-	} {
-		err := validDomainName(tc.domain)
-		if (err == nil) != tc.ok {
-			t.Errorf("validDomainName(%q) = %v, want ok %v", tc.domain, err, tc.ok)
-		}
-		if err != nil && strings.Contains(err.Error(), tc.domain) && tc.domain != "" {
-			t.Errorf("validDomainName(%q) repeats the value: %v", tc.domain, err)
-		}
-	}
-}
-
 // The non-terminal AskSecret reads an ordinary line from the same reader as Ask.
 func TestLinePrompter(t *testing.T) {
 	var out bytes.Buffer

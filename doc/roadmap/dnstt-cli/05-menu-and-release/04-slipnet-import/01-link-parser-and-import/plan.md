@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -207,3 +207,48 @@ Easy to get wrong:
   contains the password, the key or the link.
 - The tests of steps 5 and 6 pass, and the local matrix of step 7 is green; no new dependency,
   no live run.
+
+## Outcome
+
+- The parser is in `internal/config/links.go`: `ParseLink`/`ParseLinks` decode the standard
+  alphabet with and without padding and the URL-safe one, drop whitespace inside a
+  soft-wrapped line, refuse a double paste and a damaged link without repeating the content,
+  and map the fields of §10 — type, name, domain, key, SOCKS5 and SSH credentials, auth
+  kind, transport and resolvers (field 4 or 37, `doh` from 21), `payload_size` — into a
+  profile with the kill-switch on, an empty datapath and no password reference. Resolver
+  entries are normalized by `resolvers.Parse`; `tcp` and `dot` (53 becomes 853) work as P6
+  and the §10 table define them. `slipnet-enc://`, NoizDNS, unknown types, key-based
+  `dnstt_ssh`, a password without a login, an SSH link without a login or password, a bad
+  domain or key, a missing resolver, a non-https DoH URL, a negative payload size and a bad
+  version are refused with the field and the rule in the message.
+- `ValidProfileName` and `ValidDomainName` live in `internal/config/validate.go`; the wizard
+  and `profile add` call them, and the tests moved with them. One set of rules, no drift.
+- `profile import` is in `internal/cli/profile_import.go`: a hidden question in a terminal
+  (re-asked after a bad paste, then "Another link"), lines from stdin otherwise. The name
+  comes from field 2 when it is usable and free, otherwise from the wizard's question in a
+  terminal or `home` on stdin; a taken name is skipped with a warning there. The password
+  goes to the secret store under `<name>.password` before the save, a failed save deletes it
+  and reports without the value, and the in-memory set is replaced after every save. A
+  password `dnstt_ssh` profile is stored and the command says it connects only after
+  `06-ssh-exit`; a key-based link is refused and writes nothing. The password, the key and
+  the link never appear in the output or in an error.
+- Tests are synthetic: a link builder in `internal/config/links_test.go`, and
+  `internal/cli/profile_import_test.go` with an isolated config directory and a fake secret
+  store. No real link, address, key or password is in the repository.
+- Review added one rule the wizard already had: a login or password with a control character
+  is refused, because a link from an untrusted server could otherwise inject terminal
+  escapes into `profile show`. Errors from `resolvers.Parse` are replaced by own messages so
+  an entry of the link cannot leak; the end of input on the name question after profiles
+  were imported ends cleanly instead of "nothing written".
+- An IPv6 literal in field 4 is not expressible by the `host[:port[:flag]]` grammar of §10
+  (the colons are read as port separators), so such an entry is refused rather than
+  silently stored as another resolver. The format is unchanged; §10 is not edited.
+- Local matrix green: `gofmt` outside `core/`, `go build ./...`, `CGO_ENABLED=0 go build
+  ./...`, the CI vet split on Linux and Windows, `go test -race ./internal/config
+  ./internal/cli`, the full `go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`,
+  `DNSTT_CLI_TEST_NETNS=0` and the four external `netguard` live tests excluded by `-skip`,
+  the Windows cross-build and `go test -c` of all 19 packages with tests, and `git diff
+  --check`. No new dependency.
+
+Not checked here: a real generator's link — that is `02-live-link`; the SSH exit and its
+`host_key`/`key_ref` — `06-ssh-exit`; the menu's link question — the menu stage.

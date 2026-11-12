@@ -15,11 +15,12 @@ func profileCommand() *command {
 		name:    "profile",
 		args:    "<subcommand>",
 		summary: "manage profiles",
-		description: `Manage dnstt-cli profiles: add, set, show, rm, list.
+		description: `Manage dnstt-cli profiles: add, set, import, show, rm, list.
 
 Subcommands:
   add [name]      add a new profile with the interactive wizard
   set <name>      edit an existing profile (interactive)
+  import          import a profile from a slipnet:// link
   show <name>     show a profile
   rm <name>       remove a profile and its stored exit password
   list            list all profiles
@@ -29,6 +30,12 @@ The wizard asks for the profile name (a positional name skips the question; Ente
 exit is not implemented yet), the exit login and password, the resolvers — one per line,
 Enter for "network", presets by name — and the mode: tun where the system supports it (it
 needs root to connect), otherwise socks.
+
+The import subcommand asks for a slipnet:// link by hidden input in a terminal, re-asking
+after a bad paste, and reads one link per line from stdin otherwise. A dnstt link becomes
+a socks5 exit; a password dnstt_ssh link becomes an ssh exit that connects only after
+stage 06-ssh-exit. A key-based dnstt_ssh link is not imported yet, and NoizDNS (sayedns)
+and slipnet-enc:// links are refused.
 
 The exit password goes to the secret store; profiles.toml holds only a reference to it.`,
 		run: runProfile,
@@ -42,7 +49,7 @@ func runProfile(ctx context.Context, e *env, args []string) error {
 	}
 
 	if fs.NArg() == 0 {
-		return usagef("profile requires a subcommand: add, set, show, rm, list")
+		return usagef("profile requires a subcommand: add, set, import, show, rm, list")
 	}
 
 	subcmd := fs.Arg(0)
@@ -53,6 +60,8 @@ func runProfile(ctx context.Context, e *env, args []string) error {
 		return runProfileAdd(ctx, e, subArgs)
 	case "set":
 		return runProfileSet(ctx, e, subArgs)
+	case "import":
+		return runProfileImport(ctx, e, subArgs)
 	case "show":
 		return runProfileShow(ctx, e, subArgs)
 	case "rm":
@@ -237,7 +246,7 @@ func runProfileAdd(ctx context.Context, e *env, args []string) error {
 	case 0:
 	case 1:
 		name = args[0]
-		if !validProfileName(name) {
+		if !config.ValidProfileName(name) {
 			return usagef("invalid profile name %q: use ASCII letters, digits and '-', not starting with '-'", name)
 		}
 	default:
