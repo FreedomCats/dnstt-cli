@@ -580,19 +580,23 @@ func socksCheck(ctx context.Context, open exit.OpenStream) error {
 	return (&exit.SOCKS5{Open: open}).Check(ctx)
 }
 
-// A refused login and an exit that is not SOCKS5 stop the tunnel; an exit that breaks
-// the stream is a retry.
+// A refused login, a host key mismatch and an exit that is not SOCKS5 stop the tunnel; an
+// exit that breaks the stream is a retry.
 func TestExitCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		answer string
+		check  func(context.Context, exit.OpenStream) error
 		final  func(error) bool
 	}{
-		{"login", "\x05\xff", exit.IsLogin},
-		{"not socks5", "HTTP/1.0 400 Bad Request\r\n\r\n", func(err error) bool { return errors.Is(err, exit.ErrNotSOCKS5) }},
+		{"login", "\x05\xff", socksCheck, exit.IsLogin},
+		{"not socks5", "HTTP/1.0 400 Bad Request\r\n\r\n", socksCheck, func(err error) bool { return errors.Is(err, exit.ErrNotSOCKS5) }},
+		{"host key mismatch", "", func(context.Context, exit.OpenStream) error {
+			return &exit.HostKeyError{Got: "SHA256:got", Want: "SHA256:want"}
+		}, exit.IsHostKeyMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, []string{r1, r2}, func(o *Options) { o.CheckExit = socksCheck })
+			h := newHarness(t, []string{r1, r2}, func(o *Options) { o.CheckExit = tc.check })
 			h.tun.dial = wrapDial(h.tun.dial, func(s *fakeSession) { s.serve = socksAnswer(tc.answer) })
 			h.run(context.Background())
 			var err error

@@ -76,8 +76,9 @@ type Options struct {
 	// is taken up by itself. nil — the entry fails its dial.
 	NetworkDNS func() ([]netip.Addr, error)
 	// CheckExit checks the exit through a new session before it counts as connected
-	// (exit.SOCKS5.Check). A login refusal (exit.IsLogin) and an exit that is not
-	// SOCKS5 (exit.ErrNotSOCKS5) stop the tunnel; any other error is a retry. nil — no
+	// (exit.SOCKS5.Check, exit.SSH.Check). A login refusal (exit.IsLogin), an exit
+	// that is not SOCKS5 (exit.ErrNotSOCKS5) and a host key mismatch
+	// (exit.IsHostKeyMismatch) stop the tunnel; any other error is a retry. nil — no
 	// check.
 	CheckExit func(ctx context.Context, open exit.OpenStream) error
 	// Drain is called once on a stop while a session is up, before it is closed: the
@@ -421,8 +422,9 @@ func (t *Tunnel) openSession(ctx context.Context, s Session, ended <-chan struct
 //
 // The end of ctx is no error: nil. An error only when Run ends by itself: no resolver
 // completed a handshake on the first round (*NeverConnectedError), the exit refused the
-// login (exit.IsLogin), is not a SOCKS5 server (exit.ErrNotSOCKS5), or FatalExit was called.
-// Every other session failure leads to the next attempt.
+// login (exit.IsLogin), its host key does not match the pinned fingerprint
+// (exit.IsHostKeyMismatch), it is not a SOCKS5 server (exit.ErrNotSOCKS5), or FatalExit was
+// called. Every other session failure leads to the next attempt.
 //
 // If ctx comes from WithAbort (Interrupt), the second Ctrl+C cuts the stop short: Drain is
 // not waited for. On return the session is closed and the state is StateStopping.
@@ -510,7 +512,7 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			// adapter.
 			s.Close()
 			round = nil
-			if exit.IsLogin(err) || errors.Is(err, exit.ErrNotSOCKS5) {
+			if exit.IsLogin(err) || errors.Is(err, exit.ErrNotSOCKS5) || exit.IsHostKeyMismatch(err) {
 				return err
 			}
 			prev = i - 1 // the same resolver first: it is not to blame
