@@ -419,7 +419,7 @@ before a connection.
   `CGO_ENABLED=0 go build ./...`, the vet split on Linux and on `GOOS=windows`, the full
   `go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and the
   four external `netguard` live tests excluded by `-skip` (no live call), the Windows
-  cross-build with `go test -c` of all 23 packages that have tests, and `git diff --check`. No
+  cross-build with `go test -c` of all 19 packages that have tests, and `git diff --check`. No
   new dependency.
 
 Decisions taken while working:
@@ -437,8 +437,9 @@ Decisions taken while working:
 
 Recorded limitations:
 
-- `resolverOutcome.name` is filled but not read yet: the printed name is the body's, and the
-  field is there for the mid-session offer of child 3, which needs to name a resolver without
-  re-running the check.
+- `resolverOutcome.name` was filled but never read: the printed name is the body's, and the
+  field was meant for the mid-session offer of child 3, which names a resolver without
+  re-running the check. Child 3 takes the names from the supervisor's event instead, so the
+  field was removed when the stage was accepted.
 - The real terminal — the hidden input, the masked defaults, the offer's keys — is a manual
   check that was not made; Windows is cross-built and test-compiled only, `not seen`.

@@ -50,8 +50,8 @@ func TestMenuRoundFailedOffersAndReconnects(t *testing.T) {
 		{Resolver: "udp:192.0.2.54:53", Err: errors.New("dial failed")},
 	}}
 	h.checkOutcomes = []resolverOutcome{
-		{entry: "udp:192.0.2.53:53", name: "udp:192.0.2.53:53", ok: false},
-		{entry: "doh-cloudflare", name: "doh-cloudflare", ok: true},
+		{entry: "udp:192.0.2.53:53", ok: false},
+		{entry: "doh-cloudflare", ok: true},
 	}
 	h.menu.save = saveProfiles
 	h.menu.ask = &stoppedPrompt{scriptedPrompter: h.prompter, h: h}

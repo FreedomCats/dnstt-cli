@@ -421,6 +421,80 @@ func TestMenuItemsCallTheCommandBodies(t *testing.T) {
 	}
 }
 
+// newMenu must bind every item to the command's own function: the harness above replaces
+// every seam, so two seams with the same signature could be swapped and all the other tests
+// would still pass. Here newMenu's own list, remove, save and store run against the
+// isolated configuration directory; only the bodies that would need a tunnel or a server,
+// connect and check, are replaced. The store is never reached: no profile carries an exit
+// password.
+func TestMenuItemsCallTheRealCommandBodies(t *testing.T) {
+	tests := []struct {
+		name    string
+		answers []scriptedAnswer
+		want    []string
+		check   func(t *testing.T, profiles *config.Profiles)
+	}{
+		{
+			name:    "delete profile",
+			answers: []scriptedAnswer{{value: "7"}, {value: "y"}, {value: "0"}},
+			want:    []string{`Profile "home" removed.`},
+			check: func(t *testing.T, profiles *config.Profiles) {
+				if profiles.Profile["home"] != nil {
+					t.Error("the deleted profile is still in the file")
+				}
+				if profiles.Profile["other"] == nil || len(profiles.Profile) != 1 {
+					t.Errorf("remaining profiles = %v, want only other", profiles.Profile)
+				}
+			},
+		},
+		{
+			name:    "another profile",
+			answers: []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}},
+			want:    []string{"Profiles:", "  home (default)"},
+			check: func(t *testing.T, profiles *config.Profiles) {
+				if profiles.DefaultProfile != "other" {
+					t.Errorf("default_profile = %q, want other", profiles.DefaultProfile)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatedConnectConfig(t)
+			writeMenuProfiles(t, twoProfiles())
+
+			var out, errOut bytes.Buffer
+			ask := &scriptedPrompter{t: t, answers: tc.answers}
+			m := newMenu()
+			m.ask = ask
+			m.connect = func(context.Context, *env, connectRequest, <-chan struct{}) error {
+				return errors.New("the connect body must not run")
+			}
+			m.check = func(context.Context, *env, string) ([]resolverOutcome, error) {
+				return nil, errors.New("the check body must not run")
+			}
+			e := &env{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
+			if err := m.runWith(context.Background(), e, "", make(chan os.Signal, 1)); err != nil {
+				t.Fatalf("the loop = %v", err)
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("the output does not contain %q:\n%s", want, out.String())
+				}
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("the loop wrote to stderr: %s", errOut.String())
+			}
+			profiles, err := config.LoadProfiles()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, profiles)
+		})
+	}
+}
+
 // The header names the profile and its datapath, and an empty answer takes the first item.
 func TestMenuEmptyAnswerConnects(t *testing.T) {
 	isolatedConnectConfig(t)

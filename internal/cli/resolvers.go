@@ -124,11 +124,10 @@ func runResolverChecks(ctx context.Context, e *env, profileName string, prof *co
 	return err
 }
 
-// resolverOutcome is one checked entry: the profile entry it came from, the name that was
-// printed, and whether the handshake passed.
+// resolverOutcome is one checked entry: the profile entry it came from and whether the
+// handshake passed.
 type resolverOutcome struct {
 	entry string
-	name  string
 	ok    bool
 }
 
@@ -145,7 +144,7 @@ func checkResolvers(ctx context.Context, e *env, profileName string, prof *confi
 		r := check.resolver
 		if check.err != nil {
 			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, check.err)
-			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name})
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry})
 			continue
 		}
 
@@ -168,12 +167,12 @@ func checkResolvers(ctx context.Context, e *env, profileName string, prof *confi
 
 		if err != nil {
 			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, err)
-			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name})
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry})
 		} else {
 			fmt.Fprintf(e.stdout, "  %s: OK (%v)\n", check.name, elapsed.Truncate(time.Millisecond))
 			session.Close()
 			anyPassed = true
-			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name, ok: true})
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry, ok: true})
 		}
 	}
 

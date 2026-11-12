@@ -322,10 +322,10 @@ func TestMenuEditResolversFailedSaveIsReported(t *testing.T) {
 // failing, one hand-written entry fails and a preset passes.
 func mixedCheckOutcomes() []resolverOutcome {
 	return []resolverOutcome{
-		{entry: "network", name: "network (198.51.100.53)", ok: false},
-		{entry: "network", name: "network (2001:db8::53)", ok: true},
-		{entry: "udp:192.0.2.53:53", name: "udp:192.0.2.53:53", ok: false},
-		{entry: "doh-cloudflare", name: "doh-cloudflare", ok: true},
+		{entry: "network", ok: false},
+		{entry: "network", ok: true},
+		{entry: "udp:192.0.2.53:53", ok: false},
+		{entry: "doh-cloudflare", ok: true},
 	}
 }
 
@@ -393,7 +393,7 @@ func TestMenuCheckNothingFailedAsksNothing(t *testing.T) {
 
 	h := newMenuHarness(t, []scriptedAnswer{{value: "2"}, {value: "0"}})
 	h.checkOutcomes = []resolverOutcome{
-		{entry: "udp:192.0.2.53:53", name: "udp:192.0.2.53:53", ok: true},
+		{entry: "udp:192.0.2.53:53", ok: true},
 	}
 
 	if err := h.runLoop(context.Background()); err != nil {
