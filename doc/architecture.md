@@ -585,7 +585,13 @@ listen       = "127.0.0.1:1080"
 
 - `resolvers` may also hold preset names (`doh-cloudflare`, …) that expand into addresses
   built into the binary.
-- `ssh` exits (E5): `host_key` (pinned fingerprint), `user`, `password_ref` or `key_ref`.
+- `ssh` exits (E5): `user` and `host_key` are required, and exactly one of `password_ref`
+  and `key_ref`. `host_key` is the OpenSSH SHA-256 fingerprint of the server's key
+  (`SHA256:<base64>`, as `ssh-keygen -lf` prints it; the prefix may be omitted); an MD5 or a
+  `known_hosts` line is refused. `key_ref` points at the private key in PEM, decrypted: a
+  passphrase is used once, when the key is put into the store, and is not stored, because a
+  passphrase kept next to its key protects nothing and §10 has no field for it. `host_key`
+  and `key_ref` on any other exit type are errors, like every unknown key.
 - `connect [flags] [profile]`: `-datapath`, `-resolver` (one resolver for this run),
   `-no-kill-switch`, `-allow-leak`, `-v`, `-config` — the csqtt-cli meanings.
 - Commands: `connect`, `profile add|set|import|show|rm|list`, `resolvers check`, `menu`,
