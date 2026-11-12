@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: in-progress
+status: done
 base: 8302b38
 ---
 
