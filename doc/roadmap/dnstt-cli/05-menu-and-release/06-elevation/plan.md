@@ -1,7 +1,7 @@
 ---
 kind: task
 status: todo
-depends: [04-menu]
+depends: [05-menu]
 ---
 
 # Elevation from the menu

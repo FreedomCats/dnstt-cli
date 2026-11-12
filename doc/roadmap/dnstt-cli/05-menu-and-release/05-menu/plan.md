@@ -1,7 +1,7 @@
 ---
 kind: stage
 status: todo
-depends: [03-slipnet-import]
+depends: [04-slipnet-import]
 ---
 
 # The menu and the wizard

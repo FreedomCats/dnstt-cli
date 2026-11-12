@@ -39,23 +39,28 @@ it.
 2. [A cap on the payload per query (P7)](02-p7-payload-cap/plan.md) — a smaller KCP MTU
    carried by the profile key `payload_size`, for the `slipnet://` payload-size field. Task;
    detailed.
-3. [Import of `slipnet://` links](03-slipnet-import/plan.md) — the parser and
+3. [Fix the core track/close deadlock](03-core-track-deadlock/plan.md) — close a socket
+   outside the session lock so a session ending between a successful dial and its tracking
+   cannot deadlock the redial or the teardown. Task; detailed.
+4. [Import of `slipnet://` links](04-slipnet-import/plan.md) — the parser and
    `profile import` for `dnstt` and `dnstt_ssh` links, then the user's real link. Stage; two
    children.
-4. [The menu and the wizard](04-menu/plan.md) — the interactive mode of §10a. Stage; three
+5. [The menu and the wizard](05-menu/plan.md) — the interactive mode of §10a. Stage; three
    children.
-5. [Elevation from the menu](05-elevation/plan.md) — `tun` without root re-runs one
+6. [Elevation from the menu](06-elevation/plan.md) — `tun` without root re-runs one
    connection under `sudo` in the same terminal; `socks` when that is impossible. Task.
-6. [The MIT license](06-license/plan.md) — the chosen license and its record in the
+7. [The MIT license](07-license/plan.md) — the chosen license and its record in the
    repository. Task.
-7. [Release archives and `distcheck`](07-release/plan.md) — `release`, `notices`,
+8. [Release archives and `distcheck`](08-release/plan.md) — `release`, `notices`,
    `releasenotes`, `distcheck`, the `release.yml` workflow, the archives with `SHA256SUMS.txt`
    and `wintun.dll`, the notices file and the README. Task; detailed.
 
-The two core patches come first: they are the riskiest (the vendored-core rules and a
-reproducible generation) and the import can only write a `tcp:` resolver and a payload cap
-after them. The import follows, since the menu's wizard offers a link among its first
-questions. The menu is the largest product change and comes after the pieces it calls.
+The core work comes first: P6, P7 and the track/close deadlock fix are the riskiest (the
+vendored-core rules and a reproducible generation), and the import can only write a `tcp:`
+resolver and a payload cap after P6/P7. The deadlock fix comes before the product work so a
+session teardown cannot hang the later live checks. The import follows, since the menu's
+wizard offers a link among its first questions. The menu is the largest product change and
+comes after the pieces it calls.
 Elevation is one menu behaviour and follows the menu. The license is decided (MIT) and only
 recorded before the release, which needs `LICENSE` and the notices. Windows is deferred with
 `04-tun-windows`: the menu's double-click pause, the UAC window and a run of the Windows
@@ -63,7 +68,7 @@ archive are cross-built and content-checked, never run here.
 
 ## Risks and what is needed from the user
 
-- The license is MIT, chosen by the user; `06-license` records it, and it blocks nothing else.
+- The license is MIT, chosen by the user; `07-license` records it, and it blocks nothing else.
 - `slipnet://` links for a live test are the user's; they carry an exit password, so they are
   given in chat and never written into the repository.
 - `dnstt_ssh` password links create an `ssh` profile that does not connect until

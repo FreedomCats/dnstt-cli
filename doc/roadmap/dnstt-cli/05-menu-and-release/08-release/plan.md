@@ -2,7 +2,7 @@
 kind: task
 status: todo
 detailed: true
-depends: [03-slipnet-import, 04-menu, 05-elevation, 06-license]
+depends: [04-slipnet-import, 05-menu, 06-elevation, 07-license]
 ---
 
 # Release archives and `distcheck`
