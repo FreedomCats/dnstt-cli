@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"net"
 	"strings"
@@ -40,9 +41,15 @@ type SSH struct {
 
 var _ Dialer = (*SSH)(nil)
 
+// ErrKeyNeedsPassphrase is the reason ParseKey and DecryptKey give for an encrypted key
+// when no passphrase was supplied: a caller can tell "ask for a passphrase" from "ask for
+// another key" with errors.Is. The text is the message itself.
+var ErrKeyNeedsPassphrase = errors.New("the private key needs a passphrase")
+
 // ParseKey parses a PEM private key for public key authentication. passphrase is used only
-// when the key is encrypted; an empty passphrase for such a key is an error. The errors name
-// the reason only: no key material and no path gets into the message.
+// when the key is encrypted; an empty passphrase for such a key is
+// ErrKeyNeedsPassphrase. The errors name the reason only: no key material and no path gets
+// into the message.
 func ParseKey(pemBytes []byte, passphrase string) (ssh.Signer, error) {
 	signer, err := ssh.ParsePrivateKey(pemBytes)
 	if err == nil {
@@ -53,13 +60,44 @@ func ParseKey(pemBytes []byte, passphrase string) (ssh.Signer, error) {
 		return nil, errors.New("the private key cannot be parsed")
 	}
 	if passphrase == "" {
-		return nil, errors.New("the private key needs a passphrase")
+		return nil, ErrKeyNeedsPassphrase
 	}
 	signer, err = ssh.ParsePrivateKeyWithPassphrase(pemBytes, []byte(passphrase))
 	if err != nil {
 		return nil, errors.New("the passphrase is wrong or the key is damaged")
 	}
 	return signer, nil
+}
+
+// DecryptKey returns the key in PEM without a passphrase: the form the secret store keeps
+// for exit.key_ref, which architecture.md §10 has no passphrase field for. With an empty
+// passphrase the key must be unencrypted, and the input comes back unchanged; a key that
+// needs one gives ErrKeyNeedsPassphrase. With a passphrase the key is parsed and marshalled
+// again in the OpenSSH PEM form, so the result is not byte-identical to the input. The
+// errors name the reason only: no key material, no passphrase and no path gets into the
+// message.
+func DecryptKey(pemBytes []byte, passphrase string) ([]byte, error) {
+	if passphrase == "" {
+		if _, err := ssh.ParseRawPrivateKey(pemBytes); err != nil {
+			var missing *ssh.PassphraseMissingError
+			if errors.As(err, &missing) {
+				return nil, ErrKeyNeedsPassphrase
+			}
+			return nil, errors.New("the private key cannot be parsed")
+		}
+		return pemBytes, nil
+	}
+
+	key, err := ssh.ParseRawPrivateKeyWithPassphrase(pemBytes, []byte(passphrase))
+	if err != nil {
+		return nil, errors.New("the passphrase is wrong or the key is damaged")
+	}
+	block, err := ssh.MarshalPrivateKey(key, "")
+	if err != nil {
+		// A key type the marshaller has no OpenSSH form for, DSA above all.
+		return nil, errors.New("the private key type is not supported")
+	}
+	return pem.EncodeToMemory(block), nil
 }
 
 // ParseFingerprint checks a pinned host key fingerprint and returns it normalized. It

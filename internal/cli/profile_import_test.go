@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 )
 
 // Synthetic values only: a documentation domain, documentation addresses and the shared
@@ -66,6 +67,24 @@ func importSSHLink(over map[int]string) string {
 		fields[i] = v
 	}
 	return importLinkText(fields)
+}
+
+// importSSHKeyLink is a key-based dnstt_ssh link: field 16 is emptied, because the type
+// decides, and field 24 carries the given key in PEM, base64. A passphrase goes into field
+// 25, base64 too.
+func importSSHKeyLink(keyPEM []byte, passphrase string, over map[int]string) string {
+	fields := map[int]string{
+		16: "",
+		23: "key",
+		24: base64.StdEncoding.EncodeToString(keyPEM),
+	}
+	if passphrase != "" {
+		fields[25] = base64.StdEncoding.EncodeToString([]byte(passphrase))
+	}
+	for i, v := range over {
+		fields[i] = v
+	}
+	return importSSHLink(fields)
 }
 
 // withFakeStore replaces the store seam for one test.
@@ -216,22 +235,18 @@ func TestProfileImportStdinSameNameTwice(t *testing.T) {
 	}
 }
 
-// Every dnstt_ssh link is refused: a link carries no exit.host_key, and an SSH profile
-// without one does not load. On stdin the line is a warning and the other lines import.
+// An ssh line from stdin is a warning: a link carries no exit.host_key, and a stdin import
+// has no terminal to ask for the fingerprint in. The other lines still import, and the ssh
+// line leaves no profile and no secret behind.
 func TestProfileImportStdinSSHRefused(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	store := newFakeSecretStore()
 	withFakeStore(t, store)
+	keys := writeTestKeys(t)
 
-	const keyMaterial = "synthetic-private-key-material"
-	keyLink := importSSHLink(map[int]string{
-		2:  "ssh-key-home",
-		23: "key",
-		24: base64.StdEncoding.EncodeToString([]byte(keyMaterial)),
-	})
 	input := importDnsttLink(map[int]string{2: "home"}) + "\n" +
 		importSSHLink(map[int]string{2: "ssh-home"}) + "\n" +
-		keyLink + "\n"
+		importSSHKeyLink(keys.encrypted, keys.passphrase, map[int]string{2: "ssh-key-home"}) + "\n"
 	code, stdout, stderr := runCLIInput(t, input, "profile", "import")
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
@@ -239,11 +254,16 @@ func TestProfileImportStdinSSHRefused(t *testing.T) {
 	if got := strings.Count(stderr, "exit.host_key"); got != 2 {
 		t.Fatalf("stderr names exit.host_key %d times, want 2:\n%s", got, stderr)
 	}
-	if !strings.Contains(stderr, "the profile is not stored") {
-		t.Fatalf("the warning does not say the profile was not stored:\n%s", stderr)
+	if !strings.Contains(stderr, "import it in a terminal, where the fingerprint is asked") {
+		t.Fatalf("the warning does not say what to do instead:\n%s", stderr)
 	}
-	if strings.Contains(stderr, importTestSSHPassword) || strings.Contains(stderr, keyMaterial) {
-		t.Fatalf("the refusal repeats the link's values:\n%s", stderr)
+	if !strings.Contains(stderr, "the link was skipped") {
+		t.Fatalf("the warning does not say the line was skipped:\n%s", stderr)
+	}
+	for _, secret := range []string{importTestSSHPassword, keys.passphrase, keyMarker(string(keys.encrypted))} {
+		if strings.Contains(stderr, secret) || strings.Contains(stdout, secret) {
+			t.Fatalf("the output repeats the link's values:\n%s\n%s", stdout, stderr)
+		}
 	}
 	if !strings.Contains(stdout, `Profile "home" imported (exit socks5).`) {
 		t.Fatalf("the dnstt link was not imported:\n%s", stdout)
@@ -263,13 +283,35 @@ func TestProfileImportStdinSSHRefused(t *testing.T) {
 		t.Fatalf("profiles = %v, want only home", profiles.Profile)
 	}
 	if store.puts != 0 || len(store.values) != 0 {
-		t.Fatal("a refused link wrote a secret")
+		t.Fatal("a skipped link wrote a secret")
 	}
 }
 
-// Interactively a dnstt_ssh link is printed and the question repeats; a dnstt link after
-// it still imports.
-func TestProfileImportInteractiveSSHRefused(t *testing.T) {
+// A run that imported nothing but an ssh line still fails, with the warning and the
+// ordinary "no profile was imported".
+func TestProfileImportStdinOnlySSHLink(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	withFakeStore(t, store)
+
+	code, _, stderr := runCLIInput(t, importSSHLink(nil)+"\n", "profile", "import")
+	if code != exitError {
+		t.Fatalf("exit code %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "exit.host_key") || !strings.Contains(stderr, "no profile was imported") {
+		t.Fatalf("stderr does not report the warning and the empty run:\n%s", stderr)
+	}
+	if store.puts != 0 {
+		t.Fatal("a skipped link wrote a secret")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a skipped link left a file: %v", err)
+	}
+}
+
+// Interactively an ssh link is imported: the fingerprint is asked with the same validator
+// as the wizard, a bad answer asks again, and the profile is saved with the answer.
+func TestProfileImportInteractiveSSH(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	store := newFakeSecretStore()
 	withFakeStore(t, store)
@@ -277,8 +319,9 @@ func TestProfileImportInteractiveSSHRefused(t *testing.T) {
 	e, out, _ := importEnv()
 	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
 		{secret: true, value: importSSHLink(map[int]string{2: "ssh-home"})},
-		{secret: true, value: importDnsttLink(nil)},
-		{secret: true, value: ""},
+		{value: "MD5:aa:bb:cc:dd"}, // the accepted form is printed
+		{value: cliTestHostKey},
+		{secret: true, value: ""}, // finish
 	}}
 	profiles, err := config.LoadProfiles()
 	if err != nil {
@@ -287,25 +330,180 @@ func TestProfileImportInteractiveSSHRefused(t *testing.T) {
 	if err := importInteractive(context.Background(), e, profiles, store, p); err != nil {
 		t.Fatalf("importInteractive = %v", err)
 	}
-	if !strings.Contains(out.String(), "exit.host_key") {
-		t.Fatalf("the refusal does not name exit.host_key:\n%s", out.String())
+	if !strings.Contains(out.String(), "must be SHA256") {
+		t.Fatalf("the refused fingerprint does not print the accepted form:\n%s", out.String())
 	}
-	if len(p.asked) != 3 || p.asked[0] != p.asked[1] {
-		t.Fatalf("the question did not repeat after the refused link: %q", p.asked)
+	if got := strings.Count(strings.Join(p.asked, "\n"), "Pinned host key fingerprint"); got != 2 {
+		t.Fatalf("the fingerprint question was asked %d times, want 2: %q", got, p.asked)
 	}
 
 	saved, err := config.LoadProfilesFrom(path)
 	if err != nil {
+		t.Fatalf("the saved profile does not load: %v", err)
+	}
+	prof := saved.Profile["ssh-home"]
+	if prof == nil {
+		t.Fatal("the ssh link was not imported")
+	}
+	if prof.Exit.Type != "ssh" || prof.Exit.HostKey != cliTestHostKey {
+		t.Fatalf("exit = %+v", prof.Exit)
+	}
+	if prof.Exit.PasswordRef != "file:ssh-home.password" || prof.Exit.KeyRef != "" {
+		t.Fatalf("references = %+v; want only the password", prof.Exit)
+	}
+	if got := store.values["ssh-home.password"]; got != importTestSSHPassword {
+		t.Fatal("the store did not get the password")
+	}
+	if strings.Contains(string(mustRead(t, path)), importTestSSHPassword) {
+		t.Fatal("profiles.toml contains the password")
+	}
+}
+
+// A key link is decrypted at import: the store keeps the plain PEM, the passphrase is
+// dropped, and the saved profile's key_ref parses through the connect path's ParseKey.
+func TestProfileImportInteractiveSSHKey(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	withFakeStore(t, store)
+	keys := writeTestKeys(t)
+
+	e, out, errOut := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importSSHKeyLink(keys.encrypted, keys.passphrase, map[int]string{2: "ssh-key-home"})},
+		{value: keys.fingerprint},
+		{secret: true, value: ""}, // finish
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Profile["home"] == nil {
-		t.Fatal("the dnstt link after the refused one was not imported")
+	if err := importInteractive(context.Background(), e, profiles, store, p); err != nil {
+		t.Fatalf("importInteractive = %v", err)
 	}
-	if saved.Profile["ssh-home"] != nil {
-		t.Fatal("the refused SSH link was saved")
+
+	saved, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatalf("the saved profile does not load: %v", err)
 	}
-	if store.puts != 0 {
-		t.Fatal("the refused link wrote a secret")
+	prof := saved.Profile["ssh-key-home"]
+	if prof == nil {
+		t.Fatal("the key link was not imported")
+	}
+	if prof.Exit.Type != "ssh" || prof.Exit.HostKey != keys.fingerprint {
+		t.Fatalf("exit = %+v", prof.Exit)
+	}
+	if prof.Exit.KeyRef != "file:ssh-key-home.key" || prof.Exit.PasswordRef != "" {
+		t.Fatalf("references = %+v; want only the key", prof.Exit)
+	}
+	stored := store.values["ssh-key-home.key"]
+	if stored == "" {
+		t.Fatal("the key was not stored under the profile's name")
+	}
+	if _, err := exit.ParseKey([]byte(stored), ""); err != nil {
+		t.Fatalf("the stored key does not parse without a passphrase: %v", err)
+	}
+
+	marker := keyMarker(stored)
+	checked := []string{out.String(), errOut.String(), strings.Join(p.asked, "\n"), string(mustRead(t, path))}
+	for _, text := range checked {
+		if strings.Contains(text, keys.passphrase) {
+			t.Fatal("the passphrase reached the output, a question or the file")
+		}
+		if strings.Contains(text, marker) {
+			t.Fatal("the decrypted key reached the output, a question or the file")
+		}
+	}
+}
+
+// The end of input at the fingerprint question writes nothing: the link was read but nothing
+// has been stored or saved yet.
+func TestProfileImportInteractiveSSHKeyEOFAtFingerprint(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	withFakeStore(t, store)
+	keys := writeTestKeys(t)
+
+	e, _, _ := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importSSHKeyLink(keys.plain, "", map[int]string{2: "ssh-home"})},
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := importInteractive(context.Background(), e, profiles, store, p); !errors.Is(err, errCancelled) {
+		t.Fatalf("importInteractive = %v, want errCancelled", err)
+	}
+	if store.puts != 0 || len(store.values) != 0 {
+		t.Fatal("the end of input wrote a secret")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the end of input left a file: %v", err)
+	}
+}
+
+// A failed save removes the key that was put: the store and the file agree afterwards.
+func TestProfileImportInteractiveSSHKeySaveFailure(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	withFakeStore(t, store)
+	withFailingSave(t, errors.New("synthetic save failure"))
+	keys := writeTestKeys(t)
+
+	e, _, _ := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importSSHKeyLink(keys.plain, "", map[int]string{2: "ssh-home"})},
+		{value: cliTestHostKey},
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = importInteractive(context.Background(), e, profiles, store, p)
+	if err == nil || !strings.Contains(err.Error(), "synthetic save failure") ||
+		!strings.Contains(err.Error(), "the exit key was removed from the secret store") {
+		t.Fatalf("error = %v, want the save failure and the rollback", err)
+	}
+	if strings.Contains(err.Error(), string(keys.plain)) {
+		t.Fatal("the error contains the key")
+	}
+	if store.deletes != 1 || len(store.deleted) != 1 || store.deleted[0] != "file:ssh-home.key" {
+		t.Fatalf("deletes = %v, want the one reference", store.deleted)
+	}
+	if len(store.values) != 0 {
+		t.Fatal("the key stayed in the store")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a failed save left a file: %v", err)
+	}
+}
+
+// A store that refuses the key saves nothing.
+func TestProfileImportInteractiveSSHKeyPutFailure(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	store.putErr = errors.New("synthetic store failure")
+	withFakeStore(t, store)
+	keys := writeTestKeys(t)
+
+	e, _, _ := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importSSHKeyLink(keys.plain, "", map[int]string{2: "ssh-home"})},
+		{value: cliTestHostKey},
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = importInteractive(context.Background(), e, profiles, store, p)
+	if err == nil || !strings.Contains(err.Error(), "cannot store the exit key") {
+		t.Fatalf("error = %v, want the store failure", err)
+	}
+	if store.deletes != 0 {
+		t.Fatal("a failed Put led to Delete")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a failed Put saved a profile: %v", err)
 	}
 }
 

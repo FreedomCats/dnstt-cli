@@ -1,10 +1,18 @@
 package config
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/pem"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 )
 
 // Synthetic values only: a documentation domain, documentation addresses and a key made
@@ -14,7 +22,45 @@ const (
 	linkTestPassword = "synthetic-exit-password"
 	linkTestSSHPass  = "synthetic-ssh-password"
 	linkTestSSHUser  = "synthetic-ssh-user"
+	// linkTestPassphrase is the passphrase of the generated encrypted key; the wrong one is
+	// what a link with a mistake carries.
+	linkTestPassphrase      = "synthetic-link-passphrase"
+	linkTestWrongPassphrase = "the wrong link passphrase"
 )
+
+// sshLinkKey is a generated ed25519 key of one test: the PEM forms, unencrypted and
+// encrypted with linkTestPassphrase, and the signer that proves a re-marshalled key is the
+// same key. No fixture and no key of the machine.
+type sshLinkKey struct {
+	plain     []byte
+	encrypted []byte
+	signer    ssh.Signer
+}
+
+func newSSHLinkKey(t *testing.T) sshLinkKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainBlock, err := ssh.MarshalPrivateKey(priv, "synthetic-link-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "synthetic-link-key", []byte(linkTestPassphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sshLinkKey{
+		plain:     pem.EncodeToMemory(plainBlock),
+		encrypted: pem.EncodeToMemory(encryptedBlock),
+		signer:    signer,
+	}
+}
 
 // makeLine joins the fields of a synthetic link: field 0 is the version, the map holds the
 // others, and empty fields fill the gaps up to the highest index used.
@@ -269,11 +315,19 @@ func TestParseLinkName(t *testing.T) {
 	}
 }
 
-// Every refusal names the field (or the rule) and never repeats the link, the password or
-// the key: the link is the secret.
+// Every refusal names the field (or the rule) and never repeats the link, the password, the
+// key or the passphrase: the link is the secret.
 func TestParseLinkRefusals(t *testing.T) {
+	keys := newSSHLinkKey(t)
 	dnstt := linkFields(map[int]string{12: "synthetic-user", 13: linkTestPassword})
 	ssh := linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass})
+	sshKey := func(over map[int]string) map[int]string {
+		fields := linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 23: "key"})
+		for i, v := range over {
+			fields[i] = v
+		}
+		return fields
+	}
 
 	for _, tc := range []struct {
 		name   string
@@ -284,8 +338,15 @@ func TestParseLinkRefusals(t *testing.T) {
 		{"sayedns_ssh names NoizDNS", linkFields(map[int]string{1: "sayedns_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass}), []string{"field 1", "NoizDNS"}},
 		{"an unknown type is named", linkFields(map[int]string{1: "vless", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 1", "vless"}},
 		{"a missing type", linkFields(map[int]string{1: ""}), []string{"field 1", "type"}},
-		{"a password dnstt_ssh link", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass}), []string{"exit.host_key", "not stored"}},
-		{"a key-based dnstt_ssh link", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass, 23: "key"}), []string{"exit.host_key", "not stored"}},
+		{"a dnstt_ssh link without a login", linkFields(map[int]string{1: "dnstt_ssh", 15: "", 16: linkTestSSHPass}), []string{"field 15", "login"}},
+		{"a key link without a private key", sshKey(nil), []string{"field 24", "no private key"}},
+		{"an unknown SSH authentication type", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass, 23: "agent"}), []string{"field 23", "password", "key"}},
+		{"a private key that is not base64", sshKey(map[int]string{24: "%%%"}), []string{"field 24", "base64"}},
+		{"an encrypted key without a passphrase", sshKey(map[int]string{24: base64.StdEncoding.EncodeToString(keys.encrypted)}), []string{"field 25", "passphrase"}},
+		{"an encrypted key with a wrong passphrase", sshKey(map[int]string{
+			24: base64.StdEncoding.EncodeToString(keys.encrypted),
+			25: base64.StdEncoding.EncodeToString([]byte(linkTestWrongPassphrase)),
+		}), []string{"field 24", "passphrase"}},
 		{"a password without a login", linkFields(map[int]string{12: "", 13: linkTestPassword}), []string{"field 13", "login"}},
 		{"a bad domain", linkFields(map[int]string{3: "bad_domain.example.com", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 3", "domain"}},
 		{"a bad key", linkFields(map[int]string{11: "not-a-key", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 11", "64 hex"}},
@@ -309,11 +370,184 @@ func TestParseLinkRefusals(t *testing.T) {
 				strings.Contains(err.Error(), linkTestSSHPass) ||
 				strings.Contains(err.Error(), linkTestKey) ||
 				strings.Contains(err.Error(), dnstt[12]) ||
-				strings.Contains(err.Error(), ssh[15]) {
+				strings.Contains(err.Error(), ssh[15]) ||
+				strings.Contains(err.Error(), linkTestPassphrase) ||
+				strings.Contains(err.Error(), linkTestWrongPassphrase) ||
+				strings.Contains(err.Error(), "PRIVATE KEY") {
 				t.Fatalf("the error repeats a value from the link: %v", err)
 			}
 		})
 	}
+}
+
+// A dnstt_ssh link becomes an ssh exit: the login comes from field 15 and the credential
+// from field 16 or fields 23–25, and the fingerprint is left to the import, because a link
+// carries none.
+func TestParseLinkSSH(t *testing.T) {
+	keys := newSSHLinkKey(t)
+
+	t.Run("a password link", func(t *testing.T) {
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			16: linkTestSSHPass,
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.Profile.Exit.Type != "ssh" || link.Profile.Exit.User != linkTestSSHUser {
+			t.Fatalf("exit = %+v", link.Profile.Exit)
+		}
+		if link.Profile.Exit.HostKey != "" {
+			t.Fatalf("host_key = %q, want it empty for the import to ask", link.Profile.Exit.HostKey)
+		}
+		if link.Profile.Exit.PasswordRef != "" || link.Profile.Exit.KeyRef != "" {
+			t.Fatalf("the references are not empty before the store: %+v", link.Profile.Exit)
+		}
+		if link.Password != linkTestSSHPass {
+			t.Fatal("the password is not returned separately")
+		}
+		if link.Key != "" {
+			t.Fatal("a password link returned a key")
+		}
+	})
+
+	t.Run("a key link", func(t *testing.T) {
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			23: " Key ", // trimmed and lower-cased
+			24: base64.StdEncoding.EncodeToString(keys.plain),
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.Profile.Exit.Type != "ssh" || link.Profile.Exit.User != linkTestSSHUser {
+			t.Fatalf("exit = %+v", link.Profile.Exit)
+		}
+		if link.Key != string(keys.plain) {
+			t.Fatal("the unencrypted key did not come back unchanged")
+		}
+		if link.Password != "" {
+			t.Fatal("a key link returned a password")
+		}
+	})
+
+	t.Run("an encrypted key with its passphrase", func(t *testing.T) {
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			23: "key",
+			24: base64.StdEncoding.EncodeToString(keys.encrypted),
+			25: base64.StdEncoding.EncodeToString([]byte(linkTestPassphrase)),
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer, err := exit.ParseKey([]byte(link.Key), "")
+		if err != nil {
+			t.Fatalf("the decrypted key does not parse without a passphrase: %v", err)
+		}
+		if !bytes.Equal(signer.PublicKey().Marshal(), keys.signer.PublicKey().Marshal()) {
+			t.Fatal("the decrypted key is another key")
+		}
+		message := []byte("synthetic message")
+		signature, err := signer.Sign(rand.Reader, message)
+		if err != nil {
+			t.Fatalf("the decrypted key does not sign: %v", err)
+		}
+		if err := keys.signer.PublicKey().Verify(message, signature); err != nil {
+			t.Fatalf("the original public key does not verify the signature: %v", err)
+		}
+		if strings.Contains(link.Key, linkTestPassphrase) {
+			t.Fatal("the passphrase reached the key")
+		}
+	})
+
+	t.Run("no authentication type", func(t *testing.T) {
+		// SlipGate's older lines carry no type: the value in the field decides.
+		password, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			16: linkTestSSHPass,
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if password.Password != linkTestSSHPass || password.Key != "" {
+			t.Fatalf("password = %q, key set: %v; want the password", password.Password, password.Key != "")
+		}
+
+		key, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			24: base64.StdEncoding.EncodeToString(keys.plain),
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.Key != string(keys.plain) || key.Password != "" {
+			t.Fatal("a line with only field 24 is not a key link")
+		}
+	})
+
+	t.Run("a password type ignores the key", func(t *testing.T) {
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			16: linkTestSSHPass,
+			23: "password",
+			24: base64.StdEncoding.EncodeToString(keys.plain),
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.Profile.Exit.Type != "ssh" || link.Profile.Exit.User != linkTestSSHUser {
+			t.Fatalf("exit = %+v", link.Profile.Exit)
+		}
+		if link.Password != linkTestSSHPass || link.Key != "" {
+			t.Fatalf("password = %q, key set: %v; want the password only", link.Password, link.Key != "")
+		}
+	})
+
+	t.Run("a password type with no password", func(t *testing.T) {
+		// The explicit type decides: the key in field 24 belongs to the other method, so
+		// this is a password link without a password, not a key link.
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			15: linkTestSSHUser,
+			23: "password",
+			24: base64.StdEncoding.EncodeToString(keys.plain),
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.Profile.Exit.Type != "ssh" {
+			t.Fatalf("exit = %+v", link.Profile.Exit)
+		}
+		if link.Password != "" || link.Key != "" {
+			t.Fatalf("password = %q, key set: %v; want neither", link.Password, link.Key != "")
+		}
+	})
+
+	t.Run("the login comes from field 15", func(t *testing.T) {
+		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+			1:  "dnstt_ssh",
+			12: "synthetic-socks-user",
+			13: linkTestPassword,
+			15: linkTestSSHUser,
+			16: linkTestSSHPass,
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.Profile.Exit.User != linkTestSSHUser {
+			t.Fatalf("user = %q, want the SSH login of field 15", link.Profile.Exit.User)
+		}
+		if link.Password != linkTestSSHPass {
+			t.Fatal("the SOCKS5 password of field 13 was taken")
+		}
+	})
 }
 
 func TestParseLinkControlCharactersInCredentials(t *testing.T) {

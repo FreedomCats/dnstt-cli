@@ -193,10 +193,14 @@ func entryList(outcomes []resolverOutcome, pass bool) []string {
 	return entries
 }
 
-// newExitPasswordItem replaces the exit password of the current profile. The value goes to
-// the secret store first under a fresh name; the profile is saved second, so a failed save
-// can remove the new entry and leave the old reference and value in place.
-func (m *menu) newExitPasswordItem(ctx context.Context, e *env, _ <-chan struct{}) error {
+// newExitSecretItem replaces the exit credential of the current profile: the password of a
+// password exit, the key and its passphrase of a key exit. The shape follows the exit type
+// and the reference the profile carries, so an ssh profile with a key never gains a
+// password_ref and the other way round; switching the method of a profile is a later
+// change. The value goes to the secret store first under a fresh name; the profile is saved
+// second, so a failed save can remove the new entry and leave the old reference and value
+// in place.
+func (m *menu) newExitSecretItem(ctx context.Context, e *env, _ <-chan struct{}) error {
 	profiles, err := config.LoadProfiles()
 	if err != nil {
 		return err
@@ -207,9 +211,9 @@ func (m *menu) newExitPasswordItem(ctx context.Context, e *env, _ <-chan struct{
 		return fmt.Errorf("profile %q not found", name)
 	}
 	if prof.Exit.User == "" {
-		// A password_ref without a login is refused at connect time: the menu must not
+		// A credential without a login is refused at connect time: the menu must not
 		// build that profile.
-		fmt.Fprintf(e.stdout, "profile %q has no exit login, so an exit password is not used\n", name)
+		fmt.Fprintf(e.stdout, "profile %q has no exit login, so the exit secret is not used\n", name)
 		return nil
 	}
 
@@ -218,8 +222,12 @@ func (m *menu) newExitPasswordItem(ctx context.Context, e *env, _ <-chan struct{
 	if exitType == "" {
 		exitType = "socks5"
 	}
-	password, err := askExitPassword(ctx, m.ask, e.stdout, exitType)
-	if err != nil {
+	var secret exitSecret
+	if exitType == "ssh" && prof.Exit.KeyRef != "" {
+		if secret.key, err = askExitKey(ctx, m.ask, e.stdout); err != nil {
+			return err
+		}
+	} else if secret.password, err = askExitPassword(ctx, m.ask, e.stdout, exitType); err != nil {
 		return err
 	}
 
@@ -227,49 +235,86 @@ func (m *menu) newExitPasswordItem(ctx context.Context, e *env, _ <-chan struct{
 	if err != nil {
 		return err
 	}
-	newName, err := newPasswordName(name, prof.Exit.PasswordRef)
+	suffix, old := ".password", prof.Exit.PasswordRef
+	if secret.key != "" {
+		suffix, old = ".key", prof.Exit.KeyRef
+	}
+	newName, err := newSecretName(name, suffix, old)
 	if err != nil {
 		return err
 	}
-	ref, err := store.Put(newName, password)
+	ref, err := store.Put(newName, secret.value())
 	if err != nil {
-		return fmt.Errorf("cannot store the exit password: %w", err)
+		return fmt.Errorf("cannot store the %s: %w", secret.kind(), err)
 	}
 
-	old := prof.Exit.PasswordRef
-	prof.Exit.PasswordRef = ref
+	secret.apply(&prof.Exit, ref)
 	if err := m.save(profiles); err != nil {
 		if deleteErr := store.Delete(ref); deleteErr != nil {
 			return errors.Join(err,
-				fmt.Errorf("the exit password could not be removed from the secret store: %w", deleteErr))
+				fmt.Errorf("the %s could not be removed from the secret store: %w", secret.kind(), deleteErr))
 		}
-		return errors.Join(err, errors.New("the exit password was removed from the secret store"))
+		return errors.Join(err, fmt.Errorf("the %s was removed from the secret store", secret.kind()))
 	}
 
 	// The old entry goes only after the file points at the new one: a failed save above has
 	// kept it.
 	if old != "" {
 		if err := store.Delete(old); err != nil {
-			fmt.Fprintf(e.stderr, "the previous exit password could not be removed from the secret store: %v\n", err)
+			fmt.Fprintf(e.stderr, "the previous %s could not be removed from the secret store: %v\n", secret.kind(), err)
 		}
 	}
-	fmt.Fprintf(e.stdout, "Exit password of profile %q updated.\n", name)
+	fmt.Fprintf(e.stdout, "The %s of profile %q was updated.\n", secret.kind(), name)
 	return nil
 }
 
-// newPasswordName is the name of the new exit password entry: the wizard's name when the
-// profile has none yet, a fresh one otherwise. A fresh name is what makes the rollback
-// possible: Put under the existing name would overwrite the old value under the same id
-// before the profile was saved.
-func newPasswordName(profile, oldRef string) (string, error) {
+// newSecretName is the name of the new exit secret entry: the wizard's name when the
+// profile has none yet, a fresh one otherwise, with the suffix of the shape (".password" or
+// ".key"). A fresh name is what makes the rollback possible: Put under the existing name
+// would overwrite the old value under the same id before the profile was saved.
+func newSecretName(profile, suffix, oldRef string) (string, error) {
 	if oldRef == "" {
-		return profile + ".password", nil
+		return profile + suffix, nil
 	}
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("cannot create a secret name: %w", err)
 	}
-	return profile + ".password-" + hex.EncodeToString(buf[:]), nil
+	return profile + suffix + "-" + hex.EncodeToString(buf[:]), nil
+}
+
+// changePinnedFingerprintItem asks a new pinned host key fingerprint of the current profile
+// with the current value as the default answer, and saves it once. The value is public, so
+// it is shown in full; a profile that is not an SSH exit has no fingerprint to change.
+func (m *menu) changePinnedFingerprintItem(ctx context.Context, e *env, _ <-chan struct{}) error {
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		return err
+	}
+	name := currentProfile(profiles)
+	prof, ok := profiles.Profile[name]
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	if prof.Exit.Type != "ssh" {
+		fmt.Fprintf(e.stdout, "profile %q has no pinned host key: exit.type is not ssh\n", name)
+		return nil
+	}
+
+	fingerprint, err := askFingerprint(ctx, m.ask, e.stdout, prof.Exit.HostKey)
+	if err != nil {
+		return err
+	}
+	if fingerprint == prof.Exit.HostKey {
+		fmt.Fprintln(e.stdout, "nothing changed")
+		return nil
+	}
+	prof.Exit.HostKey = fingerprint
+	if err := m.save(profiles); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "Pinned host key fingerprint of profile %q updated.\n", name)
+	return nil
 }
 
 // changeServerItem asks for a new domain and key with the current values as the defaults.

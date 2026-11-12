@@ -11,8 +11,8 @@ import (
 )
 
 // runProfileImport imports one or more `slipnet://` links (architecture.md §10). In a
-// terminal every link is asked by hidden input: it carries the exit password. Otherwise
-// the links are read from stdin, one per line.
+// terminal every link is asked by hidden input: it carries the exit's credential, the
+// password or the private key. Otherwise the links are read from stdin, one per line.
 func runProfileImport(ctx context.Context, e *env, args []string) error {
 	if len(args) > 0 {
 		return usagef("extra argument: profile import takes no arguments")
@@ -87,6 +87,13 @@ func importOne(ctx context.Context, e *env, p prompter, profiles *config.Profile
 			fmt.Fprintln(e.stdout, err)
 			continue
 		}
+		// A link carries no exit.host_key, and an SSH profile without one does not load:
+		// the fingerprint is asked here, where there is a terminal to answer in.
+		if link.Profile.Exit.Type == "ssh" {
+			if link.Profile.Exit.HostKey, err = askFingerprint(ctx, p, e.stdout, ""); err != nil {
+				return false, err
+			}
+		}
 
 		name := link.Name
 		if name == "" || profiles.Profile[name] != nil {
@@ -104,7 +111,9 @@ func importOne(ctx context.Context, e *env, p prompter, profiles *config.Profile
 }
 
 // importFromInput reads all links from stdin. A bad line is a warning on stderr and does
-// not stop the rest; a taken name is a warning too, and that link is skipped.
+// not stop the rest; a taken name is a warning too, and that link is skipped. An SSH link
+// cannot be imported here either: its fingerprint cannot be asked on a stream, so it is a
+// warning and the other lines still import.
 func importFromInput(e *env, profiles *config.Profiles, store config.SecretStore) error {
 	raw, err := io.ReadAll(e.stdin)
 	if err != nil {
@@ -121,6 +130,10 @@ func importFromInput(e *env, profiles *config.Profiles, store config.SecretStore
 
 	imported := 0
 	for _, link := range links {
+		if link.Profile.Exit.Type == "ssh" {
+			fmt.Fprintln(e.stderr, "a dnstt_ssh link carries no exit.host_key; import it in a terminal, where the fingerprint is asked — the link was skipped")
+			continue
+		}
 		name := link.Name
 		if name == "" {
 			name = "home"
@@ -142,20 +155,22 @@ func importFromInput(e *env, profiles *config.Profiles, store config.SecretStore
 	return nil
 }
 
-// importLink stores the link's password, adds its profile to a copy of the set and saves
-// the copy. On a failed store or save nothing is left behind; a failed save after a
-// successful Put removes the secret again. The caller's set is replaced only after the
+// importLink stores the link's credential — the password or the SSH private key, under the
+// same names and with the same words as the wizard — adds its profile to a copy of the set
+// and saves the copy. On a failed store or save nothing is left behind; a failed save after
+// a successful Put removes the secret again. The caller's set is replaced only after the
 // save, so the next link of the same run sees the imported names.
 func importLink(link *config.Link, name string, profiles *config.Profiles, store config.SecretStore) (*config.Profile, error) {
 	prof := link.Profile
+	secret := exitSecret{password: link.Password, key: link.Key}
 
 	var ref string
-	if link.Password != "" {
+	if secret.value() != "" {
 		var err error
-		if ref, err = store.Put(name+".password", link.Password); err != nil {
-			return nil, fmt.Errorf("cannot store the exit password: %w", err)
+		if ref, err = store.Put(secret.secretName(name), secret.value()); err != nil {
+			return nil, fmt.Errorf("cannot store the %s: %w", secret.kind(), err)
 		}
-		prof.Exit.PasswordRef = ref
+		secret.apply(&prof.Exit, ref)
 	}
 
 	next := &config.Profiles{
@@ -176,9 +191,9 @@ func importLink(link *config.Link, name string, profiles *config.Profiles, store
 		}
 		if deleteErr := store.Delete(ref); deleteErr != nil {
 			return nil, errors.Join(err,
-				fmt.Errorf("the exit password could not be removed from the secret store: %w", deleteErr))
+				fmt.Errorf("the %s could not be removed from the secret store: %w", secret.kind(), deleteErr))
 		}
-		return nil, errors.Join(err, errors.New("the exit password was removed from the secret store"))
+		return nil, errors.Join(err, fmt.Errorf("the %s was removed from the secret store", secret.kind()))
 	}
 
 	*profiles = *next

@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
 )
 
@@ -17,6 +20,51 @@ import (
 // has been written. It is an ordinary error, not context.Canceled: `run` prints
 // "cancelled, nothing written" and exits 1.
 var errCancelled = errors.New("cancelled, nothing written")
+
+// exitSecret is one exit credential as the authoring paths handle it: the password of a
+// password exit or the private key of an SSH exit, decrypted. The wizard, the import and
+// the menu put it into the secret store through the same names and the same words and set
+// the same profile field, so that the three paths cannot disagree.
+type exitSecret struct {
+	password string
+	key      string
+}
+
+// secretName is the name of the store entry: <profile>.password or <profile>.key.
+func (s exitSecret) secretName(profile string) string {
+	if s.key != "" {
+		return profile + ".key"
+	}
+	return profile + ".password"
+}
+
+// kind is the credential in the words of the messages, without the article: "exit
+// password" or "exit key".
+func (s exitSecret) kind() string {
+	if s.key != "" {
+		return "exit key"
+	}
+	return "exit password"
+}
+
+// value is what the store keeps: the password itself or the decrypted key in PEM.
+func (s exitSecret) value() string {
+	if s.key != "" {
+		return s.key
+	}
+	return s.password
+}
+
+// apply records the reference the store returned in the profile: key_ref for a key,
+// password_ref for a password. Only the field of the shape is set, so a key exit never
+// gains password_ref and the other way round.
+func (s exitSecret) apply(prof *config.Exit, ref string) {
+	if s.key != "" {
+		prof.KeyRef = ref
+		return
+	}
+	prof.PasswordRef = ref
+}
 
 // wizard asks the questions of architecture.md §10a and saves the profile. The menu and
 // `profile add` build one with newWizard and call add.
@@ -61,7 +109,7 @@ func (w *wizard) add(ctx context.Context, profiles *config.Profiles, name string
 	if err != nil {
 		return "", nil, err
 	}
-	exit, password, err := w.askExit(ctx)
+	exitConf, secret, err := w.askExit(ctx)
 	if err != nil {
 		return "", nil, err
 	}
@@ -84,15 +132,17 @@ func (w *wizard) add(ctx context.Context, profiles *config.Profiles, name string
 		Resolvers:  resolverList,
 		Datapath:   datapath,
 		KillSwitch: &killSwitch,
-		Exit:       exit,
+		Exit:       exitConf,
 	}
 
+	// The store is written only now, after the last question: an end of input above leaves
+	// nothing behind, in the file or in the store.
 	var ref string
-	if password != "" {
-		if ref, err = w.store.Put(name+".password", password); err != nil {
-			return "", nil, fmt.Errorf("cannot store the exit password: %w", err)
+	if secret.value() != "" {
+		if ref, err = w.store.Put(secret.secretName(name), secret.value()); err != nil {
+			return "", nil, fmt.Errorf("cannot store the %s: %w", secret.kind(), err)
 		}
-		prof.Exit.PasswordRef = ref
+		secret.apply(&prof.Exit, ref)
 	}
 
 	// The caller's Profiles stays as it was: on a failed save there is no profile anywhere
@@ -115,9 +165,9 @@ func (w *wizard) add(ctx context.Context, profiles *config.Profiles, name string
 		}
 		if deleteErr := w.store.Delete(ref); deleteErr != nil {
 			return "", nil, errors.Join(err,
-				fmt.Errorf("the exit password could not be removed from the secret store: %w", deleteErr))
+				fmt.Errorf("the %s could not be removed from the secret store: %w", secret.kind(), deleteErr))
 		}
-		return "", nil, errors.Join(err, errors.New("the exit password was removed from the secret store"))
+		return "", nil, errors.Join(err, fmt.Errorf("the %s was removed from the secret store", secret.kind()))
 	}
 	return name, prof, nil
 }
@@ -204,13 +254,14 @@ func askPubkeyValue(ctx context.Context, ask prompter, out io.Writer, current st
 	}
 }
 
-// askExit asks the exit type, the login and, when there is a login, the password twice.
-// The password is returned separately: the caller puts it into the profile only after the
-// secret store has accepted it.
-func (w *wizard) askExit(ctx context.Context) (config.Exit, string, error) {
+// askExit asks the exit type, the login, the credential and, for an SSH exit, the pinned
+// fingerprint: the password of a password exit twice, or the path of the private key with
+// its passphrase when the key needs one. The credential is returned separately: the caller
+// puts it into the profile only after the secret store has accepted it.
+func (w *wizard) askExit(ctx context.Context) (config.Exit, exitSecret, error) {
 	exitType, err := w.askExitType(ctx)
 	if err != nil {
-		return config.Exit{}, "", err
+		return config.Exit{}, exitSecret{}, err
 	}
 
 	question := "Exit login: "
@@ -220,16 +271,16 @@ func (w *wizard) askExit(ctx context.Context) (config.Exit, string, error) {
 	for {
 		answer, err := w.readLine(ctx, question)
 		if err != nil {
-			return config.Exit{}, "", err
+			return config.Exit{}, exitSecret{}, err
 		}
 		// The login is kept as typed: only its emptiness is judged on the trimmed value.
 		// Trimming would silently change the credentials of the exit.
 		user := answer
 		if strings.TrimSpace(user) == "" {
 			if exitType == "socks5" {
-				return config.Exit{Type: exitType}, "", nil
+				return config.Exit{Type: exitType}, exitSecret{}, nil
 			}
-			fmt.Fprintln(w.out, "an HTTP exit needs a login")
+			fmt.Fprintln(w.out, "an HTTP or SSH exit needs a login")
 			continue
 		}
 		if strings.ContainsFunc(user, unicode.IsControl) {
@@ -245,32 +296,142 @@ func (w *wizard) askExit(ctx context.Context) (config.Exit, string, error) {
 			continue
 		}
 
-		password, err := w.askPassword(ctx, exitType)
-		if err != nil {
-			return config.Exit{}, "", err
+		prof := config.Exit{Type: exitType, User: user}
+		var secret exitSecret
+		if exitType == "ssh" {
+			if secret, err = askSSHAuth(ctx, w.ask, w.out); err != nil {
+				return config.Exit{}, exitSecret{}, err
+			}
+			if prof.HostKey, err = askFingerprint(ctx, w.ask, w.out, ""); err != nil {
+				return config.Exit{}, exitSecret{}, err
+			}
+		} else if secret.password, err = w.askPassword(ctx, exitType); err != nil {
+			return config.Exit{}, exitSecret{}, err
 		}
-		return config.Exit{Type: exitType, User: user}, password, nil
+		return prof, secret, nil
 	}
 }
 
-// askExitType asks the exit type with socks5 as the default. SSH is refused by name: it is
-// a later stage, not a typo.
+// askExitType asks the exit type with socks5 as the default.
 func (w *wizard) askExitType(ctx context.Context) (string, error) {
 	for {
 		answer, err := w.readLine(ctx, "Exit type [socks5]: ")
 		if err != nil {
 			return "", err
 		}
-		switch strings.ToLower(strings.TrimSpace(answer)) {
-		case "", "socks5":
+		switch exitType := strings.ToLower(strings.TrimSpace(answer)); exitType {
+		case "":
 			return "socks5", nil
-		case "http":
-			return "http", nil
-		case "ssh":
-			fmt.Fprintln(w.out, "the wizard offers socks5 and http only; write an SSH exit by hand")
+		case "socks5", "http", "ssh":
+			return exitType, nil
 		default:
-			fmt.Fprintln(w.out, "the exit type must be socks5 or http")
+			fmt.Fprintln(w.out, "the exit type must be socks5, http or ssh")
 		}
+	}
+}
+
+// askSSHAuth asks the SSH authentication method and its credential: the password twice, or
+// the key file. An empty answer is a password, the method of most links.
+func askSSHAuth(ctx context.Context, ask prompter, out io.Writer) (exitSecret, error) {
+	for {
+		answer, err := readLineFrom(ctx, ask, "SSH authentication (password, key) [password]: ")
+		if err != nil {
+			return exitSecret{}, err
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "", "password":
+			password, err := askExitPassword(ctx, ask, out, "ssh")
+			if err != nil {
+				return exitSecret{}, err
+			}
+			return exitSecret{password: password}, nil
+		case "key":
+			key, err := askExitKey(ctx, ask, out)
+			if err != nil {
+				return exitSecret{}, err
+			}
+			return exitSecret{key: key}, nil
+		default:
+			fmt.Fprintln(out, `the SSH authentication must be "password" or "key"`)
+		}
+	}
+}
+
+// askExitKey asks the path of a private key, reads it and decrypts it with its passphrase
+// when it has one: the store keeps the key in PEM without a passphrase. A path that cannot
+// be read, a damaged key and a wrong passphrase all print the reason and ask the path
+// again, so a typo does not end the wizard. Neither the key nor the passphrase reaches the
+// output, and a read failure never names the path: an *os.PathError prints it.
+func askExitKey(ctx context.Context, ask prompter, out io.Writer) (string, error) {
+	for {
+		answer, err := readLineFrom(ctx, ask, "Private key file: ")
+		if err != nil {
+			return "", err
+		}
+		path := expandHome(strings.TrimSpace(answer))
+		pemBytes, readErr := os.ReadFile(path)
+		if readErr != nil {
+			fmt.Fprintln(out, "the private key file cannot be read")
+			continue
+		}
+		key, err := exit.DecryptKey(pemBytes, "")
+		if errors.Is(err, exit.ErrKeyNeedsPassphrase) {
+			passphrase, readErr := readSecretFrom(ctx, ask, "Key passphrase: ")
+			if readErr != nil {
+				return "", readErr
+			}
+			key, err = exit.DecryptKey(pemBytes, passphrase)
+		}
+		if err != nil {
+			fmt.Fprintln(out, err)
+			continue
+		}
+		return string(key), nil
+	}
+}
+
+// expandHome replaces a leading `~/` or a bare `~` with the home directory: a shell expands
+// it before the program starts, but an answer typed at a question is not a shell. A path
+// without it, and a home directory that cannot be found, come back as they are.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[len("~/"):])
+}
+
+// askFingerprint asks the pinned host key fingerprint plainly: it is public, not a secret,
+// so it is neither hidden nor masked. The answer goes through exit.ParseFingerprint, a bad
+// one prints the reason and the question repeats; with a current value an empty answer
+// keeps it. The menu's fingerprint item and the import share the question and the
+// validator.
+func askFingerprint(ctx context.Context, ask prompter, out io.Writer, current string) (string, error) {
+	const hint = "Pinned host key fingerprint (SHA256:…, as ssh-keygen -lf prints it)"
+	question := hint + ": "
+	if current != "" {
+		question = hint + " [" + current + "]: "
+	}
+	for {
+		answer, err := readLineFrom(ctx, ask, question)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(answer) == "" && current != "" {
+			return current, nil
+		}
+		fingerprint, err := exit.ParseFingerprint(answer)
+		if err != nil {
+			fmt.Fprintln(out, err)
+			continue
+		}
+		return fingerprint, nil
 	}
 }
 

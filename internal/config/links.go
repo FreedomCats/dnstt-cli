@@ -10,22 +10,26 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
 )
 
 // Link is one parsed `slipnet://` link (architecture.md §10): the profile it describes
-// and, when the exit password is in the link, the password itself.
+// and, when the exit credential is in the link, the credential itself.
 //
-// The profile's Exit.PasswordRef is empty: the caller stores the password and fills the
-// reference. The password is never printed.
+// The profile's Exit.PasswordRef and Exit.KeyRef are empty: the caller stores the
+// credential and fills the reference. Neither the password nor the key is ever printed.
 type Link struct {
 	// Name is the profile name of field 2. Empty means the field was absent or unusable,
 	// and the caller has to ask.
 	Name string
-	// Profile is the profile the link describes, with no password reference yet.
+	// Profile is the profile the link describes, with no credential reference yet.
 	Profile *Profile
 	// Password is the exit password from the link: the value for the secret store.
 	Password string
+	// Key is the SSH exit's private key from the link, in PEM without a passphrase, as
+	// the store keeps it. Empty for a password link and for dnstt. It is never printed.
+	Key string
 }
 
 // ParseLink parses one `slipnet://` link. The input is trimmed and the scheme is matched
@@ -75,7 +79,7 @@ func ParseLink(text string) (*Link, error) {
 	case "dnstt":
 		exitType = "socks5"
 	case "dnstt_ssh":
-		return nil, errors.New("field 1: a dnstt_ssh link carries no exit.host_key, and an SSH profile without one does not load; the profile is not stored")
+		exitType = "ssh"
 	case "":
 		return nil, errors.New("field 1: the tunnel type is missing")
 	case "sayedns", "sayedns_ssh":
@@ -99,20 +103,37 @@ func ParseLink(text string) (*Link, error) {
 		return nil, errors.New("field 11: the server public key must be exactly 64 hex digits")
 	}
 
+	// The login and the password sit in different fields for the two exit types: a dnstt
+	// link carries the SOCKS5 credentials, a dnstt_ssh link the SSH ones. Every message
+	// names its field through these two, or the numbers would lie for half the links.
 	loginField, passwordField := 12, 13
+	if exitType == "ssh" {
+		loginField, passwordField = 15, 16
+	}
 	user := fieldAt(fields, loginField)
-	password := fieldAt(fields, passwordField)
 	if strings.TrimSpace(user) == "" {
 		user = ""
+		if exitType == "ssh" {
+			return nil, fmt.Errorf("field %d: an SSH exit needs a login", loginField)
+		}
 	}
 	if user != "" && strings.ContainsFunc(user, unicode.IsControl) {
 		return nil, fmt.Errorf("field %d: the login must not contain control characters", loginField)
 	}
+	password := fieldAt(fields, passwordField)
 	if password != "" && strings.ContainsFunc(password, unicode.IsControl) {
 		return nil, fmt.Errorf("field %d: the password must not contain control characters", passwordField)
 	}
 	if password != "" && user == "" {
-		return nil, errors.New("field 13: a password without a login is not accepted")
+		return nil, fmt.Errorf("field %d: a password without a login is not accepted", passwordField)
+	}
+
+	var key string
+	if exitType == "ssh" {
+		password, key, err = linkSSHCredential(fields, password)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	resolverList, err := linkResolvers(fields)
@@ -131,7 +152,8 @@ func ParseLink(text string) (*Link, error) {
 
 	// The kill-switch default is named explicitly, as the wizard does, so the profile keeps
 	// it on even if the default changes later. Datapath and Socks stay empty: a link
-	// carries no mode, and connect defaults to socks.
+	// carries no mode, and connect defaults to socks. HostKey stays empty as well: a link
+	// carries no fingerprint, so the import asks for it.
 	killSwitch := true
 	prof := &Profile{
 		Domain:      domain,
@@ -141,7 +163,64 @@ func ParseLink(text string) (*Link, error) {
 		KillSwitch:  &killSwitch,
 		Exit:        Exit{Type: exitType, User: user},
 	}
-	return &Link{Name: name, Profile: prof, Password: password}, nil
+	return &Link{Name: name, Profile: prof, Password: password, Key: key}, nil
+}
+
+// linkSSHCredential returns the credential of a dnstt_ssh link: the authentication type of
+// field 23 decides whether the password of field 16 or the private key of field 24 is the
+// credential, and a value in the field the type does not use is ignored. Only an absent
+// type — SlipGate's older lines — is decided by the value in field 16 or 24. The key is
+// returned in PEM without a passphrase: the passphrase of field 25 decrypts it and is then
+// dropped, so nothing returns it.
+func linkSSHCredential(fields []string, password string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(fieldAt(fields, 23))) {
+	case "key":
+		key, err := linkSSHKey(fields)
+		return "", key, err
+	case "password":
+		// The type decides: a key in field 24 belongs to the other method and is ignored.
+		return password, "", nil
+	case "":
+		// An older line carries no type: a password in field 16 is a password link, and
+		// a line with field 24 alone is a key link.
+		if password == "" && fieldAt(fields, 24) != "" {
+			key, err := linkSSHKey(fields)
+			return "", key, err
+		}
+		return password, "", nil
+	default:
+		return "", "", errors.New(`field 23: the SSH authentication type must be "password" or "key"`)
+	}
+}
+
+// linkSSHKey returns the private key of a dnstt_ssh link, field 24, decrypted with the
+// passphrase of field 25. The errors name the field only: the key and the passphrase
+// appear in no message.
+func linkSSHKey(fields []string) (string, error) {
+	encoded := fieldAt(fields, 24)
+	if encoded == "" {
+		return "", errors.New("field 24: a key-based dnstt_ssh link carries no private key")
+	}
+	keyPEM, ok := decodeLinkPayload(encoded)
+	if !ok {
+		return "", errors.New("field 24: the private key is not valid base64")
+	}
+	var passphrase string
+	if encoded := fieldAt(fields, 25); encoded != "" {
+		raw, ok := decodeLinkPayload(encoded)
+		if !ok {
+			return "", errors.New("field 25: the passphrase is not valid base64")
+		}
+		passphrase = string(raw)
+	}
+	key, err := exit.DecryptKey(keyPEM, passphrase)
+	switch {
+	case errors.Is(err, exit.ErrKeyNeedsPassphrase):
+		return "", errors.New("field 25: the private key needs a passphrase, and the link does not carry one")
+	case err != nil:
+		return "", fmt.Errorf("field 24: %w", err)
+	}
+	return string(key), nil
 }
 
 // ParseLinks parses one link per non-empty line. A line that does not parse becomes a

@@ -3,19 +3,89 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 )
 
 const (
 	wizardTestPubkey   = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	wizardTestPassword = "synthetic-exit-password"
+	// testKeyPassphrase is the passphrase of the generated encrypted key of these tests.
+	testKeyPassphrase = "synthetic-key-passphrase"
 )
+
+// testKeys is one generated ed25519 key of a test, written into the test's temporary
+// directory: the same key in PEM unencrypted and encrypted, the passphrase of the second
+// and the fingerprint of the public part. No fixture and no key of the machine.
+type testKeys struct {
+	plainPath     string
+	encryptedPath string
+	plain         []byte
+	encrypted     []byte
+	passphrase    string
+	fingerprint   string
+}
+
+func writeTestKeys(t *testing.T) testKeys {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainBlock, err := ssh.MarshalPrivateKey(priv, "synthetic-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "synthetic-test-key", []byte(testKeyPassphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	keys := testKeys{
+		plainPath:     filepath.Join(dir, "id_ed25519"),
+		encryptedPath: filepath.Join(dir, "id_ed25519_encrypted"),
+		plain:         pem.EncodeToMemory(plainBlock),
+		encrypted:     pem.EncodeToMemory(encryptedBlock),
+		passphrase:    testKeyPassphrase,
+		fingerprint:   ssh.FingerprintSHA256(signer.PublicKey()),
+	}
+	if err := os.WriteFile(keys.plainPath, keys.plain, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keys.encryptedPath, keys.encrypted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+// keyMarker is a recognizable run of the key's Base64 body: a message that echoed the key
+// would carry it, while the PEM header lines alone are not key material.
+func keyMarker(key string) string {
+	for _, line := range strings.Split(key, "\n") {
+		if len(line) >= 40 && !strings.HasPrefix(line, "-----") {
+			return line[:40]
+		}
+	}
+	return key
+}
 
 // scriptedAnswer is one answer of a scripted prompter, with the method the wizard must
 // use to ask for it.
@@ -154,22 +224,46 @@ func newWizardTestHarness(t *testing.T, answers []scriptedAnswer, modes []string
 }
 
 // baseWizardAnswers is a complete valid answer script for the given exit type: the name
-// "home", the test domain and key, no authentication for SOCKS5 or a login and a password
-// for HTTP, the "network" resolver and the first mode.
-func baseWizardAnswers(exitType string) []scriptedAnswer {
+// "home", the test domain and key, the exit's own questions, the "network" resolver and the
+// first mode. "ssh-password" and "ssh-key" are the two shapes of an SSH exit; the second
+// writes a generated key into the test's temporary directory.
+func baseWizardAnswers(t *testing.T, exitType string) []scriptedAnswer {
+	t.Helper()
+	kind := exitType
+	if strings.HasPrefix(exitType, "ssh-") {
+		kind = "ssh"
+	}
 	answers := []scriptedAnswer{
 		{value: "home"},
 		{value: "t.example.com"},
 		{value: wizardTestPubkey},
-		{value: exitType},
+		{value: kind},
 	}
-	if exitType == "http" {
+	switch exitType {
+	case "http":
 		answers = append(answers,
 			scriptedAnswer{value: "synthetic-user"},
 			scriptedAnswer{secret: true, value: wizardTestPassword},
 			scriptedAnswer{secret: true, value: wizardTestPassword},
 		)
-	} else {
+	case "ssh-password":
+		answers = append(answers,
+			scriptedAnswer{value: "synthetic-user"},
+			scriptedAnswer{value: ""}, // method: password
+			scriptedAnswer{secret: true, value: wizardTestPassword},
+			scriptedAnswer{secret: true, value: wizardTestPassword},
+			scriptedAnswer{value: cliTestHostKey},
+		)
+	case "ssh-key":
+		keys := writeTestKeys(t)
+		answers = append(answers,
+			scriptedAnswer{value: "synthetic-user"},
+			scriptedAnswer{value: "key"},
+			scriptedAnswer{value: keys.encryptedPath},
+			scriptedAnswer{secret: true, value: keys.passphrase},
+			scriptedAnswer{value: cliTestHostKey},
+		)
+	default:
 		answers = append(answers, scriptedAnswer{value: ""})
 	}
 	return append(answers,
@@ -293,6 +387,249 @@ func TestWizardHTTPProfile(t *testing.T) {
 	}
 }
 
+// An SSH exit with a password: the method question, the password twice and the fingerprint,
+// and the saved set is a profile that loads.
+func TestWizardSSHPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	h := newWizardTestHarness(t, baseWizardAnswers(t, "ssh-password"), []string{"tun", "socks"}, nil)
+
+	name, prof, err := h.wizard.add(context.Background(), h.profiles, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "home" {
+		t.Fatalf("name = %q", name)
+	}
+	if prof.Exit.Type != "ssh" || prof.Exit.User != "synthetic-user" {
+		t.Fatalf("exit = %+v", prof.Exit)
+	}
+	if prof.Exit.HostKey != cliTestHostKey {
+		t.Fatalf("host_key = %q, want %q", prof.Exit.HostKey, cliTestHostKey)
+	}
+	if prof.Exit.PasswordRef != "file:home.password" || prof.Exit.KeyRef != "" {
+		t.Fatalf("references = %+v; want only the password", prof.Exit)
+	}
+	if got := h.store.values["home.password"]; got != wizardTestPassword {
+		t.Fatalf("stored password = %q", got)
+	}
+	asked := strings.Join(h.prompter.asked, "\n")
+	if !strings.Contains(asked, "SSH authentication (password, key) [password]: ") ||
+		!strings.Contains(asked, "Pinned host key fingerprint") {
+		t.Fatalf("the SSH questions were not asked:\n%s", asked)
+	}
+
+	// The wizard's profile is a profile: it saves and loads through internal/config.
+	if len(h.saved) != 1 {
+		t.Fatalf("saves = %d, want 1", len(h.saved))
+	}
+	if err := config.SaveProfilesTo(path, h.saved[0]); err != nil {
+		t.Fatalf("the wizard's profile does not save: %v", err)
+	}
+	loaded, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatalf("the wizard's profile does not load: %v", err)
+	}
+	if got := loaded.Profile["home"].Exit; got.Type != "ssh" || got.PasswordRef != "file:home.password" ||
+		got.HostKey != cliTestHostKey {
+		t.Fatalf("the loaded exit = %+v", got)
+	}
+
+	if strings.Contains(h.out.String(), wizardTestPassword) {
+		t.Fatal("the wizard printed the password")
+	}
+	for _, question := range h.prompter.asked {
+		if strings.Contains(question, wizardTestPassword) {
+			t.Fatal("the password reached a question")
+		}
+	}
+}
+
+// An SSH exit with a private key: the key file is read and decrypted with its passphrase,
+// and the store keeps the plain PEM under <profile>.key.
+func TestWizardSSHKey(t *testing.T) {
+	keys := writeTestKeys(t)
+
+	t.Run("an encrypted key", func(t *testing.T) {
+		answers := []scriptedAnswer{
+			{value: "home"},
+			{value: "t.example.com"},
+			{value: wizardTestPubkey},
+			{value: "ssh"},
+			{value: "synthetic-user"},
+			{value: "key"},
+			{value: keys.encryptedPath},
+			{secret: true, value: "the wrong passphrase"}, // the reason is printed, the path re-asked
+			{value: keys.encryptedPath},
+			{secret: true, value: keys.passphrase},
+			{value: cliTestHostKey},
+			{value: ""}, // resolver: network
+			{value: ""}, // mode: the first
+		}
+		h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
+
+		_, prof, err := h.wizard.add(context.Background(), h.profiles, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prof.Exit.Type != "ssh" || prof.Exit.KeyRef != "file:home.key" {
+			t.Fatalf("exit = %+v", prof.Exit)
+		}
+		if prof.Exit.PasswordRef != "" {
+			t.Fatalf("a key exit gained password_ref %q", prof.Exit.PasswordRef)
+		}
+		stored := h.store.values["home.key"]
+		if stored == "" {
+			t.Fatal("the key was not stored under home.key")
+		}
+		if _, err := exit.ParseKey([]byte(stored), ""); err != nil {
+			t.Fatalf("the stored key does not parse without a passphrase: %v", err)
+		}
+		if !strings.Contains(h.out.String(), "the passphrase is wrong or the key is damaged") {
+			t.Fatalf("the wrong passphrase was not explained:\n%s", h.out.String())
+		}
+		asked := strings.Join(h.prompter.asked, "\n")
+		if got := strings.Count(asked, "Key passphrase: "); got != 2 {
+			t.Fatalf("the passphrase question was asked %d times, want 2:\n%s", got, asked)
+		}
+		assertKeyNotLeaked(t, h, stored)
+	})
+
+	t.Run("an unencrypted key", func(t *testing.T) {
+		answers := []scriptedAnswer{
+			{value: "home"},
+			{value: "t.example.com"},
+			{value: wizardTestPubkey},
+			{value: "ssh"},
+			{value: "synthetic-user"},
+			{value: "key"},
+			{value: keys.plainPath},
+			{value: cliTestHostKey},
+			{value: ""}, // resolver: network
+			{value: ""}, // mode: the first
+		}
+		h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
+
+		_, prof, err := h.wizard.add(context.Background(), h.profiles, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prof.Exit.KeyRef != "file:home.key" {
+			t.Fatalf("key_ref = %q", prof.Exit.KeyRef)
+		}
+		for _, question := range h.prompter.asked {
+			if strings.Contains(question, "passphrase") {
+				t.Fatalf("an unencrypted key asked for a passphrase: %q", h.prompter.asked)
+			}
+		}
+		raw, err := os.ReadFile(keys.plainPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := h.store.values["home.key"]; got != string(raw) {
+			t.Fatal("the store did not keep the file's PEM unchanged")
+		}
+		assertKeyNotLeaked(t, h, h.store.values["home.key"])
+	})
+}
+
+// A key path that cannot be read prints the reason without the path and asks again.
+func TestWizardSSHKeyMissingFile(t *testing.T) {
+	keys := writeTestKeys(t)
+	const marker = "synthetic-key-path-marker"
+	missing := filepath.Join(t.TempDir(), marker)
+	answers := []scriptedAnswer{
+		{value: "home"},
+		{value: "t.example.com"},
+		{value: wizardTestPubkey},
+		{value: "ssh"},
+		{value: "synthetic-user"},
+		{value: "key"},
+		{value: missing},
+		{value: keys.plainPath},
+		{value: cliTestHostKey},
+		{value: ""}, // resolver: network
+		{value: ""}, // mode: the first
+	}
+	h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
+
+	_, prof, err := h.wizard.add(context.Background(), h.profiles, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prof.Exit.KeyRef != "file:home.key" {
+		t.Fatalf("key_ref = %q", prof.Exit.KeyRef)
+	}
+	if !strings.Contains(h.out.String(), "the private key file cannot be read") {
+		t.Fatalf("the read failure was not explained:\n%s", h.out.String())
+	}
+	if strings.Contains(h.out.String(), marker) {
+		t.Fatalf("the message names the path of the file:\n%s", h.out.String())
+	}
+	if got := strings.Count(strings.Join(h.prompter.asked, "\n"), "Private key file: "); got != 2 {
+		t.Fatalf("the path question was asked %d times, want 2", got)
+	}
+}
+
+// The fingerprint is asked plainly and normalized: an MD5 answer prints the accepted form
+// and asks again, and a bare 43-character body is stored with the prefix.
+func TestWizardFingerprint(t *testing.T) {
+	keys := writeTestKeys(t)
+	answers := []scriptedAnswer{
+		{value: "home"},
+		{value: "t.example.com"},
+		{value: wizardTestPubkey},
+		{value: "ssh"},
+		{value: "synthetic-user"},
+		{value: "key"},
+		{value: keys.plainPath},
+		{value: "MD5:aa:bb:cc:dd"},
+		{value: strings.TrimPrefix(keys.fingerprint, "SHA256:")},
+		{value: ""}, // resolver: network
+		{value: ""}, // mode: the first
+	}
+	h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
+
+	_, prof, err := h.wizard.add(context.Background(), h.profiles, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prof.Exit.HostKey != keys.fingerprint {
+		t.Fatalf("host_key = %q, want %q", prof.Exit.HostKey, keys.fingerprint)
+	}
+	if !strings.Contains(h.out.String(), "must be SHA256") {
+		t.Fatalf("the refused fingerprint does not print the accepted form:\n%s", h.out.String())
+	}
+	if got := strings.Count(strings.Join(h.prompter.asked, "\n"), "Pinned host key fingerprint"); got != 2 {
+		t.Fatalf("the fingerprint question was asked %d times, want 2", got)
+	}
+}
+
+// assertKeyNotLeaked checks that the key did not reach the output, a question or the file
+// the profile is saved into.
+func assertKeyNotLeaked(t *testing.T, h *wizardTestHarness, key string) {
+	t.Helper()
+	marker := keyMarker(key)
+	for _, text := range []string{h.out.String(), strings.Join(h.prompter.asked, "\n")} {
+		if strings.Contains(text, marker) || strings.Contains(text, key) {
+			t.Fatalf("the key reached the terminal:\n%s", text)
+		}
+	}
+	if len(h.saved) == 0 {
+		t.Fatal("nothing was saved to check")
+	}
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	if err := config.SaveProfilesTo(path, h.saved[0]); err != nil {
+		t.Fatalf("the wizard's profile does not save: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), marker) || strings.Contains(string(raw), key) {
+		t.Fatalf("the key reached profiles.toml:\n%s", raw)
+	}
+}
+
 // The defaults are home, "network" and the first offered mode.
 func TestWizardDefaults(t *testing.T) {
 	answers := []scriptedAnswer{
@@ -331,7 +668,7 @@ func TestWizardDefaults(t *testing.T) {
 }
 
 func TestWizardPositionalNameSkipsQuestion(t *testing.T) {
-	answers := baseWizardAnswers("socks5")[1:] // everything after the name
+	answers := baseWizardAnswers(t, "socks5")[1:] // everything after the name
 	h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
 
 	name, _, err := h.wizard.add(context.Background(), h.profiles, "home")
@@ -349,7 +686,7 @@ func TestWizardPositionalNameSkipsQuestion(t *testing.T) {
 
 func TestWizardNameCollision(t *testing.T) {
 	t.Run("asked name", func(t *testing.T) {
-		answers := append([]scriptedAnswer{{value: "home"}, {value: "other"}}, baseWizardAnswers("socks5")[1:]...)
+		answers := append([]scriptedAnswer{{value: "home"}, {value: "other"}}, baseWizardAnswers(t, "socks5")[1:]...)
 		h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
 		h.profiles.Profile["home"] = &config.Profile{Domain: "old.example.com"}
 
@@ -387,8 +724,9 @@ func TestWizardNameCollision(t *testing.T) {
 }
 
 func TestWizardReasks(t *testing.T) {
-	socks := baseWizardAnswers("socks5")
-	httpAnswers := baseWizardAnswers("http")
+	socks := baseWizardAnswers(t, "socks5")
+	httpAnswers := baseWizardAnswers(t, "http")
+	sshPassword := baseWizardAnswers(t, "ssh-password")
 	tunReason := errors.New("synthetic: no TUN device")
 	socksAuth := []scriptedAnswer{
 		{value: "home"},
@@ -433,20 +771,25 @@ func TestWizardReasks(t *testing.T) {
 			wantExit: "socks5", wantMode: "tun", wantOut: "64 hex digits",
 		},
 		{
-			name:     "ssh exit",
-			answers:  insertAnswers(socks, 3, scriptedAnswer{value: "ssh"}),
-			wantExit: "socks5", wantMode: "tun",
-			wantOut: "the wizard offers socks5 and http only; write an SSH exit by hand",
-		},
-		{
 			name:     "unknown exit type",
 			answers:  insertAnswers(socks, 3, scriptedAnswer{value: "ftp"}),
-			wantExit: "socks5", wantMode: "tun", wantOut: "must be socks5 or http",
+			wantExit: "socks5", wantMode: "tun", wantOut: "must be socks5, http or ssh",
 		},
 		{
 			name:     "empty HTTP login",
 			answers:  insertAnswers(httpAnswers, 4, scriptedAnswer{value: ""}),
 			wantExit: "http", wantUser: "synthetic-user", wantMode: "tun", wantOut: "needs a login",
+		},
+		{
+			name:     "empty SSH login",
+			answers:  insertAnswers(sshPassword, 4, scriptedAnswer{value: ""}),
+			wantExit: "ssh", wantUser: "synthetic-user", wantMode: "tun", wantOut: "needs a login",
+		},
+		{
+			name:     "unknown SSH authentication",
+			answers:  insertAnswers(sshPassword, 5, scriptedAnswer{value: "agent"}),
+			wantExit: "ssh", wantUser: "synthetic-user", wantMode: "tun",
+			wantOut: `the SSH authentication must be "password" or "key"`,
 		},
 		{
 			name:     "empty password",
@@ -555,7 +898,7 @@ func TestWizardReasks(t *testing.T) {
 }
 
 func TestWizardMismatchedPasswordReasksBoth(t *testing.T) {
-	answers := baseWizardAnswers("http")
+	answers := baseWizardAnswers(t, "http")
 	answers[6] = scriptedAnswer{secret: true, value: "synthetic-other-password"}
 	answers = insertAnswers(answers, 7,
 		scriptedAnswer{secret: true, value: wizardTestPassword},
@@ -581,22 +924,26 @@ func TestWizardMismatchedPasswordReasksBoth(t *testing.T) {
 	}
 }
 
+// The end of input at any question writes nothing: every script, the passphrase and the
+// fingerprint questions of an SSH exit included.
 func TestWizardEOFAtEveryQuestion(t *testing.T) {
-	answers := baseWizardAnswers("http")
-	for cut := 0; cut < len(answers); cut++ {
-		t.Run(fmt.Sprintf("after %d answers", cut), func(t *testing.T) {
-			h := newWizardTestHarness(t, answers[:cut], []string{"tun", "socks"}, nil)
-			_, _, err := h.wizard.add(context.Background(), h.profiles, "")
-			if !errors.Is(err, errCancelled) {
-				t.Fatalf("error = %v, want errCancelled", err)
-			}
-			if h.store.puts != 0 || h.store.deletes != 0 {
-				t.Fatal("a cancelled run touched the secret store")
-			}
-			if len(h.saved) != 0 || len(h.profiles.Profile) != 0 {
-				t.Fatal("a cancelled run saved a profile")
-			}
-		})
+	for _, exitType := range []string{"http", "ssh-password", "ssh-key"} {
+		answers := baseWizardAnswers(t, exitType)
+		for cut := 0; cut < len(answers); cut++ {
+			t.Run(fmt.Sprintf("%s after %d answers", exitType, cut), func(t *testing.T) {
+				h := newWizardTestHarness(t, answers[:cut], []string{"tun", "socks"}, nil)
+				_, _, err := h.wizard.add(context.Background(), h.profiles, "")
+				if !errors.Is(err, errCancelled) {
+					t.Fatalf("error = %v, want errCancelled", err)
+				}
+				if h.store.puts != 0 || h.store.deletes != 0 {
+					t.Fatal("a cancelled run touched the secret store")
+				}
+				if len(h.saved) != 0 || len(h.profiles.Profile) != 0 {
+					t.Fatal("a cancelled run saved a profile")
+				}
+			})
+		}
 	}
 }
 
@@ -629,7 +976,7 @@ func TestWizardContextCancellationIsNotEOF(t *testing.T) {
 
 func TestWizardReadErrorPropagates(t *testing.T) {
 	injected := errors.New("synthetic read failure")
-	answers := baseWizardAnswers("socks5")
+	answers := baseWizardAnswers(t, "socks5")
 	answers[1] = scriptedAnswer{err: injected}
 	h := newWizardTestHarness(t, answers, []string{"tun", "socks"}, nil)
 
@@ -646,7 +993,7 @@ func TestWizardReadErrorPropagates(t *testing.T) {
 }
 
 func TestWizardFailedSaveRollsBackSecret(t *testing.T) {
-	h := newWizardTestHarness(t, baseWizardAnswers("http"), []string{"tun", "socks"}, nil)
+	h := newWizardTestHarness(t, baseWizardAnswers(t, "http"), []string{"tun", "socks"}, nil)
 	h.saveErr = errors.New("synthetic save failure")
 
 	_, _, err := h.wizard.add(context.Background(), h.profiles, "")
@@ -672,7 +1019,7 @@ func TestWizardFailedSaveRollsBackSecret(t *testing.T) {
 }
 
 func TestWizardPutFailureDoesNotSave(t *testing.T) {
-	h := newWizardTestHarness(t, baseWizardAnswers("http"), []string{"tun", "socks"}, nil)
+	h := newWizardTestHarness(t, baseWizardAnswers(t, "http"), []string{"tun", "socks"}, nil)
 	h.store.putErr = errors.New("synthetic store failure")
 
 	_, _, err := h.wizard.add(context.Background(), h.profiles, "")
@@ -690,6 +1037,52 @@ func TestWizardPutFailureDoesNotSave(t *testing.T) {
 	}
 	if len(h.profiles.Profile) != 0 {
 		t.Fatal("the caller's profiles were changed")
+	}
+}
+
+// The key shape rolls back the same way as the password: the put entry is deleted and no
+// message mentions a password.
+func TestWizardFailedSaveRollsBackKey(t *testing.T) {
+	h := newWizardTestHarness(t, baseWizardAnswers(t, "ssh-key"), []string{"tun", "socks"}, nil)
+	h.saveErr = errors.New("synthetic save failure")
+
+	_, _, err := h.wizard.add(context.Background(), h.profiles, "")
+	if err == nil {
+		t.Fatal("a failing save returned no error")
+	}
+	if !strings.Contains(err.Error(), "synthetic save failure") ||
+		!strings.Contains(err.Error(), "the exit key was removed from the secret store") {
+		t.Fatalf("error = %v, want the save failure and the rollback", err)
+	}
+	if strings.Contains(err.Error(), "password") {
+		t.Fatalf("the rollback of a key mentions a password: %v", err)
+	}
+	if h.store.deletes != 1 || len(h.store.deleted) != 1 || h.store.deleted[0] != "file:home.key" {
+		t.Fatalf("deletes = %v, want the one reference", h.store.deleted)
+	}
+	if len(h.store.values) != 0 {
+		t.Fatal("the key stayed in the store")
+	}
+	if len(h.saved) != 0 || len(h.profiles.Profile) != 0 {
+		t.Fatal("a failed save left the profile somewhere")
+	}
+}
+
+// A store that refuses the key saves nothing.
+func TestWizardKeyPutFailureDoesNotSave(t *testing.T) {
+	h := newWizardTestHarness(t, baseWizardAnswers(t, "ssh-key"), []string{"tun", "socks"}, nil)
+	h.store.putErr = errors.New("synthetic store failure")
+
+	_, _, err := h.wizard.add(context.Background(), h.profiles, "")
+	if err == nil || !strings.Contains(err.Error(), "cannot store the exit key") ||
+		!strings.Contains(err.Error(), "synthetic store failure") {
+		t.Fatalf("error = %v, want the store failure", err)
+	}
+	if len(h.saved) != 0 {
+		t.Fatal("the profile was saved after the store failed")
+	}
+	if h.store.deletes != 0 {
+		t.Fatal("the key was deleted although Put failed")
 	}
 }
 

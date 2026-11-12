@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
 )
 
-// seedFakePassword puts a value into the fake store without counting a Put: the test seeds
+// seedFakeSecret puts a value into the fake store without counting a Put: the test seeds
 // the state a previous run left, not a call of the code under test.
-func seedFakePassword(store *fakeSecretStore, name, value string) string {
+func seedFakeSecret(store *fakeSecretStore, name, value string) string {
 	ref := "file:" + name
 	store.values[name] = value
 	store.refs[ref] = name
@@ -516,7 +517,7 @@ func TestMenuNewExitPasswordStoresAndUpdates(t *testing.T) {
 	if got := h.store.values["home.password"]; got != wizardTestPassword {
 		t.Fatalf("stored password = %q", got)
 	}
-	if !strings.Contains(h.out.String(), `Exit password of profile "home" updated.`) {
+	if !strings.Contains(h.out.String(), `The exit password of profile "home" was updated.`) {
 		t.Fatalf("the update was not reported:\n%s", h.out.String())
 	}
 	raw := readConfigFile(t)
@@ -547,7 +548,7 @@ func TestMenuNewExitPasswordReplacesTheOldEntryAfterTheSave(t *testing.T) {
 		{secret: true, value: wizardTestPassword},
 		{value: "0"},
 	})
-	oldRef := seedFakePassword(h.store, "home.password", "old-password")
+	oldRef := seedFakeSecret(h.store, "home.password", "old-password")
 	h.menu.save = func(p *config.Profiles) error {
 		if len(h.store.deleted) != 0 {
 			t.Error("the old entry was deleted before the save")
@@ -589,7 +590,7 @@ func TestMenuNewExitPasswordFailedSaveRollsBack(t *testing.T) {
 		{secret: true, value: wizardTestPassword},
 		{value: "0"},
 	})
-	seedFakePassword(h.store, "home.password", "old-password")
+	seedFakeSecret(h.store, "home.password", "old-password")
 	h.saveErr = errors.New("synthetic save failure")
 
 	if err := h.runLoop(context.Background()); err != nil {
@@ -633,7 +634,7 @@ func TestMenuNewExitPasswordFailedDeleteSucceeds(t *testing.T) {
 		{secret: true, value: wizardTestPassword},
 		{value: "0"},
 	})
-	seedFakePassword(h.store, "home.password", "old-password")
+	seedFakeSecret(h.store, "home.password", "old-password")
 	h.menu.save = saveProfiles
 	h.store.deleteErr = errors.New("synthetic delete failure")
 
@@ -730,6 +731,9 @@ func TestMenuNewExitPasswordEmptyTypeIsSocks5(t *testing.T) {
 	}
 }
 
+// A profile without an exit login is refused before any question: the credential would be
+// unused. An ssh profile cannot be in that state — internal/config refuses one without a
+// login — so a SOCKS5 profile is what reaches the check on disk.
 func TestMenuNewExitPasswordNoLogin(t *testing.T) {
 	isolatedConnectConfig(t)
 	profiles := oneProfile("home")
@@ -740,7 +744,7 @@ func TestMenuNewExitPasswordNoLogin(t *testing.T) {
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
-	if !strings.Contains(h.out.String(), `profile "home" has no exit login, so an exit password is not used`) {
+	if !strings.Contains(h.out.String(), `profile "home" has no exit login, so the exit secret is not used`) {
 		t.Fatalf("the refusal was not printed:\n%s", h.out.String())
 	}
 	if h.store.puts != 0 || len(h.saved) != 0 {
@@ -801,6 +805,316 @@ func TestMenuNewExitPasswordEOF(t *testing.T) {
 	}
 }
 
+// --- the exit secret of a key profile ---
+
+func TestMenuNewExitSecretKeyStoresAndUpdates(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{
+		{value: "4"},
+		{value: keys.encryptedPath},
+		{secret: true, value: keys.passphrase},
+		{value: "0"},
+	})
+	oldRef := seedFakeSecret(h.store, "home.key", "old-key-material")
+	h.menu.save = func(p *config.Profiles) error {
+		if len(h.store.deleted) != 0 {
+			t.Error("the old key was deleted before the save")
+		}
+		return saveProfiles(p)
+	}
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatalf("the saved profile does not load: %v", err)
+	}
+	prof := profiles.Profile["home"]
+	newRef := prof.Exit.KeyRef
+	if newRef == oldRef || !strings.HasPrefix(newRef, "file:home.key-") {
+		t.Fatalf("key_ref = %q, want a fresh home.key name", newRef)
+	}
+	if prof.Exit.PasswordRef != "" {
+		t.Fatalf("a key profile gained password_ref %q", prof.Exit.PasswordRef)
+	}
+	if len(h.store.deleted) != 1 || h.store.deleted[0] != oldRef {
+		t.Fatalf("deleted = %v, want the old reference once", h.store.deleted)
+	}
+	if _, ok := h.store.values["home.key"]; ok {
+		t.Fatal("the old key stayed in the store")
+	}
+
+	var stored string
+	for name, value := range h.store.values {
+		if strings.HasPrefix(name, "home.key-") {
+			stored = value
+		}
+	}
+	if stored == "" {
+		t.Fatal("the new key is not in the store under home.key-<random>")
+	}
+	if _, err := exit.ParseKey([]byte(stored), ""); err != nil {
+		t.Fatalf("the stored key does not parse without a passphrase: %v", err)
+	}
+	if !strings.Contains(h.out.String(), `The exit key of profile "home" was updated.`) {
+		t.Fatalf("the update was not reported:\n%s", h.out.String())
+	}
+
+	marker := keyMarker(stored)
+	checked := []string{h.out.String(), h.errOut.String(), strings.Join(h.prompter.asked, "\n"), readConfigFile(t)}
+	for _, text := range checked {
+		if strings.Contains(text, keys.passphrase) {
+			t.Fatal("the passphrase reached the output, a question or the file")
+		}
+		if strings.Contains(text, marker) {
+			t.Fatal("the key reached the output, a question or the file")
+		}
+	}
+}
+
+func TestMenuNewExitSecretKeyFailedSaveRollsBack(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{
+		{value: "4"},
+		{value: keys.encryptedPath},
+		{secret: true, value: keys.passphrase},
+		{value: "0"},
+	})
+	oldRef := seedFakeSecret(h.store, "home.key", "old-key-material")
+	h.saveErr = errors.New("synthetic save failure")
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.KeyRef; got != oldRef {
+		t.Fatalf("key_ref = %q, want the old reference", got)
+	}
+	if got := h.store.values["home.key"]; got != "old-key-material" {
+		t.Fatalf("the old value = %q, want it kept", got)
+	}
+	if len(h.store.deleted) != 1 || !strings.HasPrefix(h.store.deleted[0], "file:home.key-") {
+		t.Fatalf("deleted = %v, want the new key", h.store.deleted)
+	}
+	if len(h.store.values) != 1 {
+		t.Fatalf("the store has %d values, want only the old one", len(h.store.values))
+	}
+	errOut := h.errOut.String()
+	if !strings.Contains(errOut, "synthetic save failure") ||
+		!strings.Contains(errOut, "the exit key was removed from the secret store") {
+		t.Fatalf("the rollback was not reported: %s", errOut)
+	}
+	if strings.Contains(errOut, string(keys.plain)) {
+		t.Fatal("the key reached the error")
+	}
+}
+
+func TestMenuNewExitSecretKeyFailedDeleteSucceeds(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{
+		{value: "4"},
+		{value: keys.plainPath},
+		{value: "0"},
+	})
+	seedFakeSecret(h.store, "home.key", "old-key-material")
+	h.menu.save = saveProfiles
+	h.store.deleteErr = errors.New("synthetic delete failure")
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.KeyRef; !strings.HasPrefix(got, "file:home.key-") {
+		t.Fatalf("key_ref = %q, want the new reference", got)
+	}
+	if !strings.Contains(h.errOut.String(), "the previous exit key could not be removed from the secret store: synthetic delete failure") {
+		t.Fatalf("the failed delete was not reported: %s", h.errOut.String())
+	}
+	if got := h.choices(); got != 2 {
+		t.Fatalf("the loop asked %d times, want 2", got)
+	}
+}
+
+// --- the pinned fingerprint ---
+
+// countSaves replaces the menu's save with the real one and counts its calls: the item must
+// write the file exactly once, and a wrapped save proves it without hiding the file.
+func countSaves(h *menuHarness) *int {
+	saves := 0
+	h.menu.save = func(p *config.Profiles) error {
+		saves++
+		return saveProfiles(p)
+	}
+	return &saves
+}
+
+func TestMenuChangePinnedFingerprint(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{
+		{value: "5"},
+		{value: strings.TrimPrefix(keys.fingerprint, "SHA256:")}, // a bare body is normalized
+		{value: "0"},
+	})
+	saves := countSaves(h)
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1", *saves)
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatalf("the saved profile does not load: %v", err)
+	}
+	if got := profiles.Profile["home"].Exit.HostKey; got != keys.fingerprint {
+		t.Fatalf("host_key = %q, want %q", got, keys.fingerprint)
+	}
+	if got := strings.Join(h.prompter.asked, "\n"); !strings.Contains(got, " ["+cliTestHostKey+"]: ") {
+		t.Fatalf("the current fingerprint is not the default answer:\n%s", got)
+	}
+	if !strings.Contains(h.out.String(), `Pinned host key fingerprint of profile "home" updated.`) {
+		t.Fatalf("the update was not reported:\n%s", h.out.String())
+	}
+}
+
+func TestMenuChangePinnedFingerprintUnchanged(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "5"}, {value: ""}, {value: "0"}})
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if len(h.saved) != 0 {
+		t.Fatal("an unchanged fingerprint saved a profile")
+	}
+	if !strings.Contains(h.out.String(), "nothing changed") {
+		t.Fatalf("the empty answer did not say nothing changed:\n%s", h.out.String())
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.HostKey; got != cliTestHostKey {
+		t.Fatalf("host_key = %q, want it kept", got)
+	}
+}
+
+func TestMenuChangePinnedFingerprintReasks(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{
+		{value: "5"},
+		{value: "MD5:aa:bb:cc:dd"}, // refused
+		{value: keys.fingerprint},
+		{value: "0"},
+	})
+	saves := countSaves(h)
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1", *saves)
+	}
+	if !strings.Contains(h.out.String(), "must be SHA256") {
+		t.Fatalf("the invalid value was not explained:\n%s", h.out.String())
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.HostKey; got != keys.fingerprint {
+		t.Fatalf("host_key = %q, want %q", got, keys.fingerprint)
+	}
+}
+
+func TestMenuChangePinnedFingerprintNotSSH(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneProfile("home"))
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "5"}, {value: "0"}})
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if !strings.Contains(h.out.String(), `profile "home" has no pinned host key: exit.type is not ssh`) {
+		t.Fatalf("the refusal was not printed:\n%s", h.out.String())
+	}
+	if len(h.saved) != 0 {
+		t.Fatal("a profile that is not ssh saved something")
+	}
+	for _, question := range h.prompter.asked {
+		if strings.Contains(question, "Pinned host key fingerprint") {
+			t.Fatalf("the refusal asked for a fingerprint: %q", h.prompter.asked)
+		}
+	}
+}
+
+func TestMenuChangePinnedFingerprintEOF(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "5"}})
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the end of input = %v, want nil", err)
+	}
+	if len(h.saved) != 0 {
+		t.Fatal("the end of input saved a profile")
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.HostKey; got != cliTestHostKey {
+		t.Fatalf("host_key = %q, want it kept", got)
+	}
+}
+
+func TestMenuChangePinnedFingerprintFailedSave(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+	keys := writeTestKeys(t)
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "5"}, {value: keys.fingerprint}, {value: "0"}})
+	h.saveErr = errors.New("synthetic save failure")
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if !strings.Contains(h.errOut.String(), "synthetic save failure") {
+		t.Fatalf("the failed save was not reported: %s", h.errOut.String())
+	}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := profiles.Profile["home"].Exit.HostKey; got != cliTestHostKey {
+		t.Fatalf("host_key = %q, want the old one", got)
+	}
+}
+
 // --- a new domain or key ---
 
 func maskedDomainQuestion(domain string) string {
@@ -817,7 +1131,7 @@ func TestMenuChangeServerSavesBoth(t *testing.T) {
 	newKey := strings.Repeat("ab", 32)
 
 	h := newMenuHarness(t, []scriptedAnswer{
-		{value: "5"},
+		{value: "6"},
 		{value: "new.example.com"},
 		{value: newKey},
 		{value: "0"},
@@ -854,7 +1168,7 @@ func TestMenuChangeServerEmptyPairKeepsBoth(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "5"}, {value: ""}, {value: ""}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "6"}, {value: ""}, {value: ""}, {value: "0"}})
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -882,7 +1196,7 @@ func TestMenuChangeServerInvalidAnswersReask(t *testing.T) {
 	newKey := strings.Repeat("cd", 32)
 
 	h := newMenuHarness(t, []scriptedAnswer{
-		{value: "5"},
+		{value: "6"},
 		{value: "bad_domain"}, // invalid
 		{value: "new.example.com"},
 		{value: "0123"}, // short key
@@ -918,7 +1232,7 @@ func TestMenuChangeServerFailedSaveIsReported(t *testing.T) {
 	writeMenuProfiles(t, oneProfile("home"))
 
 	h := newMenuHarness(t, []scriptedAnswer{
-		{value: "5"},
+		{value: "6"},
 		{value: "new.example.com"},
 		{value: ""},
 		{value: "0"},
@@ -945,8 +1259,8 @@ func TestMenuChangeServerEOF(t *testing.T) {
 		name    string
 		answers []scriptedAnswer
 	}{
-		{"at the domain question", []scriptedAnswer{{value: "5"}}},
-		{"at the key question", []scriptedAnswer{{value: "5"}, {value: "new.example.com"}}},
+		{"at the domain question", []scriptedAnswer{{value: "6"}}},
+		{"at the key question", []scriptedAnswer{{value: "6"}, {value: "new.example.com"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolatedConnectConfig(t)

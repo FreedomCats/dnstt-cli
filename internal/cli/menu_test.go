@@ -49,6 +49,27 @@ func oneProfile(name string) *config.Profiles {
 	}
 }
 
+// menuSSHProfile is an ssh exit profile of the menu tests: the shared synthetic profile
+// with a pinned fingerprint and the given key reference. The key itself is not in the
+// store: only the reference is, as a saved profile has it.
+func menuSSHProfile(keyRef string) *config.Profile {
+	prof := menuProfile()
+	prof.Exit.Type = "ssh"
+	prof.Exit.User = "synthetic-user"
+	prof.Exit.HostKey = cliTestHostKey
+	prof.Exit.KeyRef = keyRef
+	prof.Exit.PasswordRef = ""
+	return prof
+}
+
+// oneSSHProfile is the set of one ssh profile, which is also its default.
+func oneSSHProfile(name, keyRef string) *config.Profiles {
+	return &config.Profiles{
+		DefaultProfile: name,
+		Profile:        map[string]*config.Profile{name: menuSSHProfile(keyRef)},
+	}
+}
+
 // twoProfiles is home and other, home as the default.
 func twoProfiles() *config.Profiles {
 	return &config.Profiles{
@@ -412,23 +433,31 @@ func TestMenuItemsCallTheCommandBodies(t *testing.T) {
 			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 },
 		},
 		{
-			name:    "new exit password",
+			name:    "new exit password or key",
 			answers: []scriptedAnswer{{value: "4"}, {secret: true, value: "new-password"}, {secret: true, value: "new-password"}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 && h.store.puts == 1 },
 		},
 		{
+			// The synthetic profile is not an SSH exit, so the item's body runs and refuses.
+			name:    "change pinned fingerprint",
+			answers: []scriptedAnswer{{value: "5"}, {value: "0"}},
+			ran: func(h *menuHarness) bool {
+				return strings.Contains(h.out.String(), "has no pinned host key")
+			},
+		},
+		{
 			name:    "change domain or key",
-			answers: []scriptedAnswer{{value: "5"}, {value: "new.example.com"}, {value: ""}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "6"}, {value: "new.example.com"}, {value: ""}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 },
 		},
 		{
 			name:    "another profile",
-			answers: []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "7"}, {value: "other"}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return h.listed == 1 && len(h.saved) == 1 },
 		},
 		{
 			name:    "delete profile",
-			answers: []scriptedAnswer{{value: "7"}, {value: "y"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "8"}, {value: "y"}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return len(h.removed) == 1 },
 		},
 	}
@@ -469,7 +498,7 @@ func TestMenuItemsCallTheRealCommandBodies(t *testing.T) {
 	}{
 		{
 			name:    "delete profile",
-			answers: []scriptedAnswer{{value: "7"}, {value: "y"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "8"}, {value: "y"}, {value: "0"}},
 			want:    []string{`Profile "home" removed.`},
 			check: func(t *testing.T, profiles *config.Profiles) {
 				if profiles.Profile["home"] != nil {
@@ -482,7 +511,7 @@ func TestMenuItemsCallTheRealCommandBodies(t *testing.T) {
 		},
 		{
 			name:    "another profile",
-			answers: []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "7"}, {value: "other"}, {value: "0"}},
 			want:    []string{"Profiles:", "  home (default)"},
 			check: func(t *testing.T, profiles *config.Profiles) {
 				if profiles.DefaultProfile != "other" {
@@ -602,7 +631,7 @@ func TestMenuAnotherProfile(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, twoProfiles())
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "6"}, {value: "nosuch"}, {value: "other"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "nosuch"}, {value: "other"}, {value: "0"}})
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -621,7 +650,7 @@ func TestMenuAnotherProfileFailedSave(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, twoProfiles())
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "other"}, {value: "0"}})
 	h.saveErr = errors.New("synthetic save failure")
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
@@ -646,7 +675,7 @@ func TestMenuDeleteProfileAsksFirst(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	no := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "n"}, {value: "0"}})
+	no := newMenuHarness(t, []scriptedAnswer{{value: "8"}, {value: "n"}, {value: "0"}})
 	if err := no.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -661,7 +690,7 @@ func TestMenuDeleteProfileAsksFirst(t *testing.T) {
 		t.Fatal("the menu did not continue after the refusal")
 	}
 
-	yes := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "yes"}, {value: "0"}})
+	yes := newMenuHarness(t, []scriptedAnswer{{value: "8"}, {value: "yes"}, {value: "0"}})
 	if err := yes.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -677,7 +706,7 @@ func TestMenuDeleteDefaultLeavesTheProfileChoice(t *testing.T) {
 	writeMenuProfiles(t, threeProfiles())
 
 	h := newMenuHarness(t, []scriptedAnswer{
-		{value: "7"},     // delete profile
+		{value: "8"},     // delete profile
 		{value: "y"},     // confirm
 		{value: "other"}, // the profile to work with
 		{value: "0"},     // leave
@@ -841,7 +870,7 @@ func TestMenuFailedItemIsPrintedAndTheLoopContinues(t *testing.T) {
 // An empty link answer runs the wizard; the profile appears and the loop continues with it.
 func TestMenuNoProfileRunsTheWizard(t *testing.T) {
 	isolatedConnectConfig(t)
-	answers := append([]scriptedAnswer{{secret: true, value: ""}}, baseWizardAnswers("http")...)
+	answers := append([]scriptedAnswer{{secret: true, value: ""}}, baseWizardAnswers(t, "http")...)
 	h := newMenuHarness(t, answers)
 
 	if err := h.runLoop(context.Background()); err != nil {

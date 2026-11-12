@@ -27,16 +27,19 @@ Subcommands:
   list            list all profiles
 
 The wizard asks for the profile name (a positional name skips the question; Enter takes
-"home"), the tunnel domain, the server public key, the exit type (socks5 or http only; an
-SSH exit is written by hand), the exit login and password, the resolvers — one per line,
-Enter for "network", presets by name — and the mode: tun where the system supports it (it
-needs root to connect), otherwise socks.
+"home"), the tunnel domain, the server public key, the exit type (socks5, http or ssh; for
+ssh the authentication method — the password twice, or the path of a private key with its
+passphrase when it has one — and the pinned fingerprint), the exit login and password, the
+resolvers — one per line, Enter for "network", presets by name — and the mode: tun where the
+system supports it (it needs root to connect), otherwise socks.
 
 The import subcommand asks for a slipnet:// link by hidden input in a terminal, re-asking
 after a bad paste, and reads one link per line from stdin otherwise. A dnstt link becomes
-a socks5 exit. A dnstt_ssh link is refused as a warning or an error, because it carries no
-exit.host_key and the profile it would make does not load; NoizDNS (sayedns) and
-slipnet-enc:// links are refused too.
+a socks5 exit. A dnstt_ssh link becomes an ssh exit: the login and the password or the
+private key come from the link, a passphrase only decrypts the key, and the pinned
+fingerprint is asked in a terminal. From stdin such a link is a warning, because the
+fingerprint cannot be asked there. NoizDNS (sayedns) and slipnet-enc:// links are refused
+too.
 
 The exit password and key go to the secret store; profiles.toml holds only a reference to
 them. A hand-written SSH exit needs exit.user, exit.host_key and exactly one of

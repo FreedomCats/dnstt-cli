@@ -370,6 +370,104 @@ func TestSSHParseKey(t *testing.T) {
 	}
 }
 
+// A key decrypted by DecryptKey parses through ParseKey without a passphrase and signs with
+// the same public key; no message of either function carries key material or a passphrase.
+func TestSSHDecryptKey(t *testing.T) {
+	priv, original := generateEd25519(t)
+	const (
+		passphrase = "correct horse battery staple"
+		wrong      = "the wrong passphrase"
+		// marker sits in a PEM header of every key below: a message that echoed the key
+		// would carry it.
+		marker = "synthetic-key-marker"
+	)
+	encode := func(block *pem.Block) []byte {
+		block.Headers = map[string]string{"Comment": marker}
+		return pem.EncodeToMemory(block)
+	}
+	plainBlock, err := ssh.MarshalPrivateKey(priv, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "test", []byte(passphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, encrypted := encode(plainBlock), encode(encryptedBlock)
+	for _, key := range [][]byte{plain, encrypted} {
+		if !bytes.Contains(key, []byte(marker)) {
+			t.Fatal("the marker is not in the PEM: the message check would be vacuous")
+		}
+	}
+
+	// An unencrypted key comes back byte for byte: the store keeps the user's file.
+	got, err := DecryptKey(plain, "")
+	if err != nil {
+		t.Fatalf("an unencrypted key: %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Error("an unencrypted key was changed")
+	}
+
+	// An encrypted key with its passphrase becomes the plain PEM the build accepts.
+	decrypted, err := DecryptKey(encrypted, passphrase)
+	if err != nil {
+		t.Fatalf("an encrypted key with the right passphrase: %v", err)
+	}
+	if bytes.Equal(decrypted, encrypted) {
+		t.Fatal("the passphrase did not decrypt the key")
+	}
+	signer, err := ParseKey(decrypted, "")
+	if err != nil {
+		t.Fatalf("the decrypted key does not parse without a passphrase: %v", err)
+	}
+	if !bytes.Equal(signer.PublicKey().Marshal(), original.PublicKey().Marshal()) {
+		t.Error("the decrypted key is another key")
+	}
+	// The decrypted key opens what the original one signs: the same private key.
+	message := []byte("synthetic message")
+	signature, err := signer.Sign(rand.Reader, message)
+	if err != nil {
+		t.Fatalf("the decrypted key does not sign: %v", err)
+	}
+	if err := original.PublicKey().Verify(message, signature); err != nil {
+		t.Errorf("the original public key does not verify the signature: %v", err)
+	}
+
+	// Without a passphrase an encrypted key asks for one, and the sentinel is what tells
+	// the caller from a damaged key.
+	_, errMissing := DecryptKey(encrypted, "")
+	if !errors.Is(errMissing, ErrKeyNeedsPassphrase) {
+		t.Errorf("an encrypted key without a passphrase: %v, want ErrKeyNeedsPassphrase", errMissing)
+	}
+	if _, err := ParseKey(encrypted, ""); !errors.Is(err, ErrKeyNeedsPassphrase) {
+		t.Errorf("ParseKey without a passphrase: %v, want ErrKeyNeedsPassphrase", err)
+	}
+
+	refused, errWrong := DecryptKey(encrypted, wrong)
+	if errWrong == nil || !strings.Contains(errWrong.Error(), "passphrase is wrong") {
+		t.Errorf("a wrong passphrase: %v", errWrong)
+	}
+	if refused != nil {
+		t.Error("a failed decryption returned bytes")
+	}
+	_, errJunk := DecryptKey([]byte("not a key"), "")
+	if errJunk == nil || !strings.Contains(errJunk.Error(), "cannot be parsed") {
+		t.Errorf("junk: %v", errJunk)
+	}
+
+	// No message carries the passphrase, the wrong passphrase or the key.
+	for _, e := range []error{errMissing, errWrong, errJunk} {
+		if e == nil {
+			continue
+		}
+		if strings.Contains(e.Error(), passphrase) || strings.Contains(e.Error(), wrong) ||
+			strings.Contains(e.Error(), marker) {
+			t.Errorf("the message carries the passphrase or key material: %v", e)
+		}
+	}
+}
+
 func TestSSHParseFingerprint(t *testing.T) {
 	_, signer := generateEd25519(t)
 	fingerprint := ssh.FingerprintSHA256(signer.PublicKey())
