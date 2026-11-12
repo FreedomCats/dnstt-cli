@@ -77,12 +77,14 @@ func newSockets(cfg *Config) *sockets {
 // once and reports net.ErrClosed.
 func (s *sockets) track(c io.Closer) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		// Close runs without s.mu: a *trackedConn calls forget, which takes it too.
+		s.mu.Unlock()
 		c.Close()
 		return net.ErrClosed
 	}
 	s.open[c] = struct{}{}
+	s.mu.Unlock()
 	return nil
 }
 

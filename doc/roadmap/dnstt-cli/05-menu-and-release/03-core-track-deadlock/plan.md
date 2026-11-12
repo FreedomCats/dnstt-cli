@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -79,3 +79,39 @@ Easy to get wrong:
   written by the tool.
 - The full local matrix of step 4 passes; no new dependency, profile key, transport or user
   behavior; no values, dates or environment details in the changed files.
+
+## Outcome
+
+Done: `sockets.track` no longer closes a socket while holding `s.mu`, so a session that ends
+between a successful dial and its tracking can no longer deadlock the redial or the
+teardown.
+
+- Core (`scripts/vendorcore/_files/client/transport.go`, generated into `core/client/`):
+  `track` takes `s.mu` only to read `closed` and insert into `open`; on a closed session it
+  unlocks, then closes the socket and returns `net.ErrClosed` — a `*trackedConn` closes
+  through `forget`, which takes the same mutex. The successful path is unchanged: insert,
+  unlock, return nil. `defer s.mu.Unlock()` is gone, since it would keep the bug.
+  `forget`, `closeAll` and `trackedConn.Close` are untouched: `closeAll` already takes the
+  map and unlocks before closing, and `forget` on the nil map after it is safe. No second
+  lock, no goroutine, no signature change.
+- Test (`scripts/vendorcore/_files/client/transport_test.go`, new, in-package):
+  `TestSocketsTrackClosedSession` builds `newSockets(&Config{})`, a `net.Pipe` pair and a
+  `*trackedConn`, marks the session closed, and calls `track` in a goroutine behind a 2 s
+  bound. On the old code it fails by that timeout (`track of a closed session blocked`, the
+  closer waits for `s.mu` held by `track`); on the fix it gets `net.ErrClosed`, the peer
+  reads EOF and `s.open` is empty. The peer deadline is set before `track` closes its end:
+  `net.Pipe` refuses a deadline once either end is closed. `t.Cleanup(s.closeAll)` is
+  registered only after the bounded wait succeeds — on the old code cleanup would hang on
+  the mutex the stuck goroutine holds. Loopback only, no live call, no flake under `-race`
+  (`-count=100`).
+- Regeneration: `go run ./scripts/vendorcore -upstream ../dnstt` from `0c5c52a`; the tool
+  wrote `CORE_VERSION` (`files 35`, `added 14`, `rules 41` unchanged). `vendorcore -check`
+  passes, and a second generation is byte-identical in `core/`.
+- The full local matrix passed: `gofmt` outside `core/`, `go build ./...`,
+  `CGO_ENABLED=0 go build ./...`, the vet split on Linux and Windows
+  (`-testinggoroutine=false` for `core/`), `go test -race ./core/client`, the full
+  `go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and
+  the `-skip` of the four external `netguard` live tests, the Windows cross-build with
+  `go test -c` of all 19 packages that have tests, and `git diff --check`. No new
+  dependency, profile key, transport or user behavior; no values, dates or environment
+  details in the changed files.
