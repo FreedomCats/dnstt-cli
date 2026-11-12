@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 3d80d87
 ---
 
 # Interactive mode and releases
@@ -9,7 +10,11 @@ Goal (`architecture.md` §12, E4): the program is usable without learning the co
 `slipnet://` link imports a profile, and there are signed-off release archives for Linux and
 Windows. `architecture.md` R9, §10a; `analysis.md` §6 for the license.
 
-Detailed when its turn comes; below is the outline from `architecture.md`.
+Split into the children below. The order is the risk order: the two core patches first, because
+they change the vendored core and its reproducible generation and make the `tcp` transport and
+the payload-size field of a link usable; then the link import that uses them; then the menu;
+then elevation, which is a menu behaviour; then the license record and the release that needs
+it.
 
 ## Done when
 
@@ -27,20 +32,51 @@ Detailed when its turn comes; below is the outline from `architecture.md`.
 - Release archives for Linux and Windows with `SHA256SUMS.txt`; `distcheck` runs.
 - A license is chosen (`analysis.md` §6) and recorded.
 
-## Outline
+## Children
 
-1. The menu: items, signals, the status line at the bottom.
-2. The wizard and the profile import.
-3. P6 — the transport `tcp:`.
-4. P7 — a cap on the payload per query (KCP MTU), for the `slipnet://` payload-size field
-   and for resolvers that cut large answers.
-5. Privilege elevation from the menu.
-6. Release scripts: `release`, `notices`, `releasenotes`, `distcheck`.
-7. The license decision.
-8. `slipnet://` import live, on a real link.
+1. [Plain DNS over TCP (P6)](01-p6-tcp-transport/plan.md) — the `tcp:` resolver transport in
+   the vendored core and in the resolver parser. Task; detailed.
+2. [A cap on the payload per query (P7)](02-p7-payload-cap/plan.md) — a smaller KCP MTU
+   carried by the profile key `payload_size`, for the `slipnet://` payload-size field. Task;
+   detailed.
+3. [Import of `slipnet://` links](03-slipnet-import/plan.md) — the parser and
+   `profile import` for `dnstt` and `dnstt_ssh` links, then the user's real link. Stage; two
+   children.
+4. [The menu and the wizard](04-menu/plan.md) — the interactive mode of §10a. Stage; three
+   children.
+5. [Elevation from the menu](05-elevation/plan.md) — `tun` without root re-runs one
+   connection under `sudo` in the same terminal; `socks` when that is impossible. Task.
+6. [The MIT license](06-license/plan.md) — the chosen license and its record in the
+   repository. Task.
+7. [Release archives and `distcheck`](07-release/plan.md) — `release`, `notices`,
+   `releasenotes`, `distcheck`, the `release.yml` workflow, the archives with `SHA256SUMS.txt`
+   and `wintun.dll`, the notices file and the README. Task; detailed.
+
+The two core patches come first: they are the riskiest (the vendored-core rules and a
+reproducible generation) and the import can only write a `tcp:` resolver and a payload cap
+after them. The import follows, since the menu's wizard offers a link among its first
+questions. The menu is the largest product change and comes after the pieces it calls.
+Elevation is one menu behaviour and follows the menu. The license is decided (MIT) and only
+recorded before the release, which needs `LICENSE` and the notices. Windows is deferred with
+`04-tun-windows`: the menu's double-click pause, the UAC window and a run of the Windows
+archive are cross-built and content-checked, never run here.
 
 ## Risks and what is needed from the user
 
-- The license is the user's decision and blocks the first release.
-- `slipnet://` links for a live test are the user's; they carry an exit password, so they
-  are given in chat and never written into the repository.
+- The license is MIT, chosen by the user; `06-license` records it, and it blocks nothing else.
+- `slipnet://` links for a live test are the user's; they carry an exit password, so they are
+  given in chat and never written into the repository.
+- `dnstt_ssh` password links create an `ssh` profile that does not connect until
+  `06-ssh-exit`; that is the user's deliberate choice, the import says so, and `host_key`
+  arrives with that stage. Key-based links are refused with a message naming that stage, and
+  no key material is kept before its `key_ref`. Until then `connect` refuses the imported
+  profile with the existing "SSH exit is not implemented yet".
+- P7's key is `payload_size` (bytes of the DNS payload; `0` or absent — the domain's maximum;
+  the wizard does not ask it).
+- The archives are `linux/amd64` and `windows/amd64`; `wintun.dll` is fetched by the release
+  build itself — the `release.yml` job runs `scripts/release`, which downloads it — so nobody
+  downloads it by hand and puts it next to an unpacked release. The workflow run and the
+  publication are the user's; the draft release is published by hand.
+- The Windows halves — the UAC window of elevation, the double-click pause of the menu and a
+  run of the Windows archive — stay with `04-tun-windows`, which is blocked. Here they are
+  cross-built and content-checked only, and no Windows result is claimed.

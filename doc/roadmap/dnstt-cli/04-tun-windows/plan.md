@@ -1,6 +1,6 @@
 ---
 kind: stage
-status: todo
+status: blocked
 ---
 
 # System VPN on Windows
@@ -8,6 +8,11 @@ status: todo
 Goal (`architecture.md` §12, E3): the same as the Linux stage, on Windows — Wintun, WFP in
 a dynamic session, one app ID for the whole program. `architecture.md` R6, R7, §05, §05a,
 §09.
+
+## Blocked
+
+The user deferred Windows until a Windows machine is available; the live acceptance in
+`## Done when` cannot be run. No Windows code is started meanwhile.
 
 Detailed when its turn comes; below is the outline from `architecture.md`.
 
