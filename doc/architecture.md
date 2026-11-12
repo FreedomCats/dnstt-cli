@@ -269,7 +269,7 @@ package client // core/client, new files next to the upstream ones
 type Config struct {
     Domain           dns.Name
     PubKey           []byte
-    Resolver         Resolver // {Transport: DoH | DoT | UDP, Address: URL or host:port}
+    Resolver         Resolver // {Transport: DoH | DoT | UDP | TCP, Address: URL or host:port}
     UTLS             string   // upstream syntax of -utls; "" — DefaultUTLS, "none" — Go TLS
     Control          func(network, address string, c syscall.RawConn) error // R4
     LookupIP         func(ctx context.Context, host string) ([]netip.Addr, error) // R5
