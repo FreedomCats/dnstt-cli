@@ -570,6 +570,7 @@ utls         = ""                               # empty — the DefaultUTLS dist
 datapath     = "tun"                            # tun | socks
 kill_switch  = true                             # tun: traffic closed while the tunnel is down
 tun_dns      = "1.1.1.1"                        # DNS behind the server for tun (R7)
+payload_size = 0                                # cap on the payload per query, bytes; 0 — the domain's maximum
 
 [profile.home.exit]
 type         = "socks5"                         # socks5 | http | ssh

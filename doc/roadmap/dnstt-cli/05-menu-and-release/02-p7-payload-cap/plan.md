@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 detailed: true
 ---
 
@@ -108,3 +108,65 @@ Easy to get wrong:
 - `core/` is regenerated from the recorded upstream commit, `vendorcore -check` passes and a
   second generation is byte-identical.
 - The local matrix of step 7 passes; no live run and no new dependency.
+
+## Outcome
+
+Done: the profile key `payload_size` caps the payload of one DNS query, and the session
+turns the cap into a smaller KCP MTU.
+
+- Profile (`internal/config/profiles.go`): `Profile.PayloadSize int` with
+  `toml:"payload_size"` after `tun_dns`, no `omitempty` — a save writes the zero like the
+  other defaults, and an absent key reads as zero. `payload_size` is in
+  `knownProfileKeys`, so a misspelt key stays an unknown-key error; `validateProfile`
+  refuses a negative value with a message naming the key. The upper bound is not checked
+  there: the floor depends on the domain and is enforced by the session.
+- Core (`scripts/vendorcore/_files/client/session.go`, generated into `core/client/`):
+  `Config.PayloadSize`; `Dial` takes `capacity := dnsNameCapacity(cfg.Domain)`, lowers it
+  to `PayloadSize` when `0 < PayloadSize < capacity`, and only then subtracts the
+  per-message overhead (`8 + 1 + numPadding + 1`). A cap at or above the capacity changes
+  nothing; a cap that leaves fewer than 80 bytes fails `Dial` with
+  `payload_size %d leaves only %d bytes for payload, below the 80-byte minimum`, and the
+  domain's own error keeps its wording. With `PayloadSize == 0` the MTU, the bytes on the
+  wire and the log line are exactly as before. The server, the wire format and the
+  transports are not touched.
+- App (`internal/app/tunnel.go`): `sessionConfig` carries `prof.PayloadSize`, so the first
+  session and every redial get it; the comment above stays about the keepalive.
+- `profile show` prints `Payload Size: N` only when the value is non-zero, after `Tun DNS`.
+- Docs: `doc/architecture.md` §10 and `dnstt-cli.example.toml` list `payload_size = 0` under
+  `tun_dns`. The wizard does not ask it, and nothing writes it yet: the `slipnet://` import
+  is child 3.
+
+The plan expected `kcpConn.GetMtu()` in the session tests, but kcp-go v5.6.8 has no MTU
+getter. The tests read the MTU from the line `Dial` logs after `SetMtu` succeeds, so they
+still assert the value the KCP session was given. Another deviation is in the generation
+only: the first `go run ./scripts/vendorcore` does not compile while `internal/app` already
+sets the new field and `core/client` does not have it yet, because `scripts/internal/script`
+imports `internal/app`; that first run used a `go run -overlay` with a temporary
+`tunnel.go`, and the tool itself was the only writer of `core/`. On the final tree
+`go run ./scripts/vendorcore -check -upstream ../dnstt` runs with no overlay.
+
+Tests: `TestSessionPayloadSizeMTU` (0 → 134, 120 → 107, at the capacity → 134, above →
+134), `TestSessionPayloadSizeTooSmall` (90 → 77, the error names `payload_size` and 90) and
+`TestSessionPayloadSizeCarriesStream` (a 20 KB stream through a capped session) in the core;
+`TestProfilePayloadSizeRoundTrip`, `TestProfilePayloadSize` (absent, explicit zero, set),
+`TestProfilePayloadSizeNegative` and `TestProfilePayloadSizeMisspelt` in config;
+`TestSessionConfigCarriesPayloadSize` in app; `TestProfileShowPayloadSize` in the CLI.
+
+Checks on the final tree: `gofmt` outside `core/` clean; `go build ./...` and
+`CGO_ENABLED=0 go build ./...`; the CI vet split on Linux and with `GOOS=windows`;
+`go test -race ./core/client ./internal/config ./internal/app ./internal/cli`; the full
+`go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and
+the four external `netguard` live tests skipped; the Windows cross-build and `go test -c`
+of all 19 packages with Windows tests; `git diff --check`. `core/` comes from `0c5c52a`
+with `CORE_VERSION` unchanged (`files = 34`, `rules = 41`, `added = 13`); `vendorcore
+-check` passes and a second generation is byte-identical.
+
+Out of the plan and not done: no `slipnet://` import, no new dependency, no live run.
+
+Not touched, worth a later look: `resolvers check` builds `client.Config` without the cap
+and the upstream `run` in `core/client/main.go` computes the MTU without it — both are
+diagnostic or unused paths, not sessions of a profile. Found once during the matrix, not
+reproduced in three repeats: `sockets.track` closes a socket while holding `s.mu`, and
+`trackedConn.Close` calls `s.forget`, which takes the same lock — closing a session between
+a successful dial and its tracking would deadlock. It comes from P1, before this task, and
+P7 does not touch the transports; a separate task should fix it.

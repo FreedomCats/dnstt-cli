@@ -193,6 +193,99 @@ func TestProfileOneWriteRoundTrip(t *testing.T) {
 	}
 }
 
+// A payload_size keeps its value on a save and a reload; a zero is written like the other
+// defaults, so the file always carries the key.
+func TestProfilePayloadSizeRoundTrip(t *testing.T) {
+	for _, size := range []int{0, 120} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			p := &Profiles{DefaultProfile: "home", Profile: map[string]*Profile{
+				"home": {
+					Domain:      "t.example.com",
+					Pubkey:      strings.Repeat("01", 32),
+					PayloadSize: size,
+					Exit:        Exit{Type: "socks5"},
+				},
+			}}
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := SaveProfilesTo(path, p); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf("payload_size = %d", size)
+			if !strings.Contains(string(raw), want) {
+				t.Fatalf("the file does not say %q:\n%s", want, raw)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.Profile["home"].PayloadSize; got != size {
+				t.Errorf("payload_size = %d, want %d", got, size)
+			}
+		})
+	}
+}
+
+// A missing payload_size reads 0; an explicit 0 stays 0; both mean the domain's maximum.
+func TestProfilePayloadSize(t *testing.T) {
+	const head = `[profile.home]
+domain = "t.example.com"
+pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+`
+	for _, tc := range []struct {
+		name string
+		key  string
+		want int
+	}{
+		{name: "absent"},
+		{name: "explicit zero", key: "payload_size = 0\n"},
+		{name: "set", key: "payload_size = 120\n", want: 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := os.WriteFile(path, []byte(head+tc.key), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadProfilesFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.Profile["home"].PayloadSize; got != tc.want {
+				t.Errorf("payload_size = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// A negative payload_size is refused; the error names the key.
+func TestProfilePayloadSizeNegative(t *testing.T) {
+	p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), PayloadSize: -1}
+	err := validateProfile("home", p)
+	if err == nil || !strings.Contains(err.Error(), "payload_size") {
+		t.Fatalf("validateProfile = %v, want an error naming payload_size", err)
+	}
+}
+
+// A misspelt payload_size is an unknown key, not a silent zero.
+func TestProfilePayloadSizeMisspelt(t *testing.T) {
+	raw := `[profile.home]
+domain = "t.example.com"
+pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+payload_siz = 120
+`
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadProfilesFrom(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "payload_siz") {
+		t.Fatalf("load = %v, want an unknown-key error naming payload_siz", err)
+	}
+}
+
 // A missing one_write is false; the key is known in the exit section, so a misspelt one is
 // refused there and not somewhere else.
 func TestProfileOneWriteKey(t *testing.T) {

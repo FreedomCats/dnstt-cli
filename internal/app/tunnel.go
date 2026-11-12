@@ -188,6 +188,7 @@ func sessionConfig(prof *config.Profile, domain dns.Name, pubkey []byte, opts Tu
 		Control:          opts.Control,
 		Logf:             opts.Logf,
 		KeepAliveTimeout: supervisor.DefaultKeepAliveTimeout,
+		PayloadSize:      prof.PayloadSize,
 	}
 }
 

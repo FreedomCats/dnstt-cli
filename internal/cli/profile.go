@@ -143,6 +143,9 @@ func runProfileShow(_ context.Context, e *env, args []string) error {
 	if prof.TunDNS != "" {
 		fmt.Fprintf(e.stdout, "  Tun DNS: %s\n", prof.TunDNS)
 	}
+	if prof.PayloadSize != 0 {
+		fmt.Fprintf(e.stdout, "  Payload Size: %d\n", prof.PayloadSize)
+	}
 	fmt.Fprintf(e.stdout, "  Exit Type: %s\n", prof.Exit.Type)
 	if prof.Exit.User != "" {
 		fmt.Fprintf(e.stdout, "  Exit User: %s\n", prof.Exit.User)

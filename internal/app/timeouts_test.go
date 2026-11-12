@@ -74,3 +74,27 @@ func TestSessionConfigCarriesPolicyKeepAlive(t *testing.T) {
 		})
 	}
 }
+
+// sessionConfig carries the profile's payload_size, so the first session and every redial
+// get the cap.
+func TestSessionConfigCarriesPayloadSize(t *testing.T) {
+	domain, err := dns.ParseName("t.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubkey, err := hex.DecodeString(strings.Repeat("01", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, size := range []int{0, 120} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			prof := testProfile(config.Exit{})
+			prof.PayloadSize = size
+			cfg := sessionConfig(prof, domain, pubkey, TunnelOptions{Profile: prof})
+			if cfg.PayloadSize != size {
+				t.Errorf("PayloadSize = %d, want %d", cfg.PayloadSize, size)
+			}
+		})
+	}
+}

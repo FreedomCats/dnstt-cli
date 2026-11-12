@@ -52,6 +52,10 @@ type Config struct {
 	// KeepAliveTimeout is how long the session lives without data from the server; 0 is
 	// upstream's 2 minutes. The server sends a keepalive every 10 s.
 	KeepAliveTimeout time.Duration
+	// PayloadSize is the cap on the DNS payload of one query, in bytes: 0 means the
+	// domain's maximum. The same unit as the payload-size field of slipnet:// links. The
+	// KCP MTU is the smaller of the domain's capacity and this cap.
+	PayloadSize int
 	// Logf receives the messages of the session and of its transports. nil discards
 	// them.
 	Logf func(format string, args ...any)
@@ -107,8 +111,17 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 		cfg.Logf = logf
 	}
 
-	mtu := dnsNameCapacity(cfg.Domain) - 8 - 1 - numPadding - 1 // clientid + padding length prefix + padding + data length prefix
+	capacity := dnsNameCapacity(cfg.Domain)
+	capped := false
+	if cfg.PayloadSize > 0 && cfg.PayloadSize < capacity {
+		capacity = cfg.PayloadSize
+		capped = true
+	}
+	mtu := capacity - 8 - 1 - numPadding - 1 // clientid + padding length prefix + padding + data length prefix
 	if mtu < 80 {
+		if capped {
+			return nil, fmt.Errorf("payload_size %d leaves only %d bytes for payload, below the 80-byte minimum", cfg.PayloadSize, mtu)
+		}
 		return nil, fmt.Errorf("domain %s leaves only %d bytes for payload", cfg.Domain, mtu)
 	}
 	spec := cfg.UTLS

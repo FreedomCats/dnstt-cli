@@ -18,6 +18,7 @@ utls         = ""                           # uTLS distribution; empty — the D
 datapath     = "tun"                        # "tun" (system-wide VPN) or "socks" (local proxy)
 kill_switch  = true                         # (tun only) Block traffic while tunnel is down
 tun_dns      = "1.1.1.1"                    # DNS behind the server for tun mode
+payload_size = 0                            # cap on the payload per query, bytes; 0 — the domain's maximum
 
 [profile.home.exit]
 type         = "socks5"                     # socks5 | http | ssh (ssh is stage E5)

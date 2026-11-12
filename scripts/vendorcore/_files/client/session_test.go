@@ -156,6 +156,93 @@ func TestSessionStreams(t *testing.T) {
 	}
 }
 
+// A payload_size cap is a cap on the encoded name's capacity, before the per-message
+// overhead: a smaller cap gives a smaller MTU, 0 keeps the domain's own, and a cap at or
+// above the capacity changes nothing.
+func TestSessionPayloadSizeMTU(t *testing.T) {
+	const (
+		capacity = 147 // dnsNameCapacity(t.example.com)
+		overhead = 8 + 1 + numPadding + 1
+	)
+	if got := dnsNameCapacity(testDomain); got != capacity {
+		t.Fatalf("dnsNameCapacity(%s) = %d, want %d", testDomain, got, capacity)
+	}
+	if got := capacity - overhead; got != 134 {
+		t.Fatalf("today's MTU is %d, want 134", got)
+	}
+
+	srv := startServer(t)
+	for _, tc := range []struct {
+		name string
+		size int
+		want int
+	}{
+		{"no cap", 0, 134},
+		{"cap below the domain", 120, 107},
+		{"cap at the capacity", 147, 134},
+		{"cap above the capacity", 200, 134},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := udpConfig(srv)
+			cfg.PayloadSize = tc.size
+			if got := mtuOf(t, cfg); got != tc.want {
+				t.Errorf("MTU %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// mtuOf returns the MTU Dial logs and passes to SetMtu. The KCP session has no MTU getter.
+func mtuOf(t *testing.T, cfg Config) int {
+	t.Helper()
+	var mtu int
+	cfg.Logf = func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		const marker = ", MTU "
+		i := strings.Index(msg, marker)
+		if i < 0 {
+			return
+		}
+		rest := msg[i+len(marker):]
+		if j := strings.Index(rest, ","); j >= 0 {
+			rest = rest[:j]
+		}
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			t.Fatalf("cannot parse the session log %q: %v", msg, err)
+		}
+		mtu = n
+	}
+	_ = dial(t, cfg)
+	return mtu
+}
+
+// A cap that leaves fewer than 80 bytes fails Dial with an error naming payload_size and
+// its value, not a silent raise and not a panic in SetMtu.
+func TestSessionPayloadSizeTooSmall(t *testing.T) {
+	srv := startServer(t)
+	cfg := udpConfig(srv)
+	cfg.PayloadSize = 90 // 90 - 13 = 77, below the 80-byte floor
+	_, err := Dial(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Dial succeeded with a payload size below the 80-byte floor")
+	}
+	if !strings.Contains(err.Error(), "payload_size") || !strings.Contains(err.Error(), "90") {
+		t.Errorf("error %q does not name payload_size and its value", err)
+	}
+}
+
+// A capped session still carries a stream through the in-process server.
+func TestSessionPayloadSizeCarriesStream(t *testing.T) {
+	srv := startServer(t)
+	cfg := udpConfig(srv)
+	cfg.PayloadSize = 120
+	s := dial(t, cfg)
+	if err := echo(s, bytes.Repeat([]byte("x"), 20000)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A silent server ends the session within the keepalive timeout: Done closes, Err says
 // why, new streams fail.
 func TestSessionServerSilent(t *testing.T) {

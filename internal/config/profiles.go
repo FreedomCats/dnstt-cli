@@ -31,8 +31,12 @@ type Profile struct {
 	// off. Read it with KillSwitchOn.
 	KillSwitch *bool  `toml:"kill_switch,omitempty"`
 	TunDNS     string `toml:"tun_dns"`
-	Exit       Exit   `toml:"exit"`
-	Socks      Socks  `toml:"socks"`
+	// PayloadSize is the cap on the DNS payload one query carries, in bytes: 0 or
+	// absent means the domain's maximum. No omitempty: a zero is written like the
+	// other defaults, and an absent key reads as zero either way.
+	PayloadSize int   `toml:"payload_size"`
+	Exit        Exit  `toml:"exit"`
+	Socks       Socks `toml:"socks"`
 }
 
 // KillSwitchOn reports whether the kill-switch is on: a missing key means on, only an
@@ -234,6 +238,12 @@ func validateProfile(name string, p *Profile) error {
 		errs = append(errs, fmt.Errorf("%s: datapath must be \"tun\" or \"socks\"", prefix))
 	}
 
+	// A negative payload_size is refused. The upper bound is not checked here: the
+	// 80-byte floor depends on the domain and is enforced by the session.
+	if p.PayloadSize < 0 {
+		errs = append(errs, fmt.Errorf("%s: payload_size must not be negative", prefix))
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -313,16 +323,17 @@ func checkUnknownKeys(data map[string]any) error {
 
 func checkProfileKeys(profileName string, data map[string]any) error {
 	knownProfileKeys := map[string]bool{
-		"domain":      true,
-		"pubkey":      true,
-		"resolvers":   true,
-		"bootstrap":   true,
-		"utls":        true,
-		"datapath":    true,
-		"kill_switch": true,
-		"tun_dns":     true,
-		"exit":        true,
-		"socks":       true,
+		"domain":       true,
+		"pubkey":       true,
+		"resolvers":    true,
+		"bootstrap":    true,
+		"utls":         true,
+		"datapath":     true,
+		"kill_switch":  true,
+		"tun_dns":      true,
+		"payload_size": true,
+		"exit":         true,
+		"socks":        true,
 	}
 
 	knownExitKeys := map[string]bool{
