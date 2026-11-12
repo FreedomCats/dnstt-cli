@@ -53,6 +53,13 @@ func TestParse(t *testing.T) {
 		{"udp:dns.example@192.0.2.53",
 			Resolver{Transport: client.UDP, Address: "dns.example:53", Pins: addrs("192.0.2.53")},
 			"udp:dns.example:53@192.0.2.53"},
+		{"tcp:192.0.2.53",
+			Resolver{Transport: client.TCP, Address: "192.0.2.53:53"}, "tcp:192.0.2.53:53"},
+		{"tcp:ns.example:5353",
+			Resolver{Transport: client.TCP, Address: "ns.example:5353"}, ""},
+		{"tcp:ns.example@192.0.2.53,2001:db8::53",
+			Resolver{Transport: client.TCP, Address: "ns.example:53", Pins: addrs("192.0.2.53", "2001:db8::53")},
+			"tcp:ns.example:53@192.0.2.53,2001:db8::53"},
 	} {
 		got, err := Parse(tc.entry)
 		if err != nil {
@@ -81,8 +88,10 @@ func TestParseErrors(t *testing.T) {
 	for _, tc := range []struct{ entry, want string }{
 		{"", "no transport"},
 		{"doh-cloudflare", "no transport"},
-		{"tcp:192.0.2.53:53", "not supported yet"},
-		{"doq:dns.example", "unknown transport"},
+		{"doq:dns.example", `unknown transport "doq": doh, dot, udp or tcp`},
+		{"tcp:", "bad host name"},
+		{"tcp:ns.example:0", "bad port"},
+		{"tcp:ns.example:65536", "bad port"},
 		{"doh:http://doh.example/dns-query", "https://"},
 		{"doh:https://user@doh.example/dns-query@192.0.2.1", "user name"},
 		{"doh:https:///dns-query", "bad host name"},

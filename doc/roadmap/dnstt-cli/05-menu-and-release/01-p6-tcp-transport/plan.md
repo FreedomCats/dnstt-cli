@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 ---
 
@@ -118,3 +118,45 @@ Easy to get wrong:
   is written by the tool.
 - The full local matrix of step 6 passes; no live run, no profile, no new dependency.
 - No link import, no payload cap and no profile key is part of this task.
+
+## Outcome
+
+Done: `tcp:host[:port]` is a resolver transport both in the parser and in the core.
+
+- Core (`scripts/vendorcore/_files/client/transport.go`, generated into `core/client/`):
+  `TCP Transport = "tcp"`; `openTransport` splits the address, requires `Config.LookupIP`
+  for a host name, and passes a plain dialer to `newTLSPacketConn` — the two-octet length
+  prefix, the queues and the P2 redial are DoT's, the TLS is not. The dialer keeps the
+  session cancellation active through the dial with DoT's `context.AfterFunc` bridge and
+  calls `s.dial`, so `Config.Control` and `s.track` see the socket. `newTLSPacketConn` was
+  not renamed. The session log prints no uTLS fingerprint for TCP.
+- Tests (`_files/client/tcp_test.go`, four loopback tests): a session through a TCP stub
+  that forwards to `server.StartTest`; the wire is a length prefix and a parsed DNS query,
+  not a TLS record; closing the session closes the TCP connection; a connection dropped
+  after its first message is redialed and carries the session. The stub leaves P2's backoff
+  globals at their defaults: `shortRedial`'s cleanup races with a transport entering
+  `redial` at session close under `-race`, and the default redial's first attempt is
+  immediate anyway.
+- Parser (`internal/resolvers/resolvers.go`): `tcp` accepted, port 53 by default; pins,
+  host-name rules and the `String`/`Parse` round-trip are unchanged; the "not supported
+  yet" refusal is gone and the messages name all four transports. No preset and no
+  bootstrap transport; `internal/resolvers/presets.go` is untouched.
+- Help (`internal/cli/resolvers.go`): the resolvers description names the four entry forms.
+  Step 4 expected such a list to exist already; it did not, so one sentence was added
+  instead of a list being edited.
+- Generation: `core/` comes from `0c5c52a` with the new file; `core/CORE_VERSION` is
+  written by the tool (`files = 34`, `added = 13`); `vendorcore -check` passes and a second
+  generation is byte-identical.
+
+Checks on the final tree: `gofmt` outside `core/` clean; `go build ./...` and
+`CGO_ENABLED=0 go build ./...`; the CI vet split on Linux and with `GOOS=windows`;
+`go test -race ./core/client ./internal/resolvers`; the full
+`go test -race -count=1 ./...` with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and
+the four external `netguard` live tests skipped; the Windows cross-build and `go test -c`
+of all 19 packages with tests; `git diff --check`.
+
+Out of the plan and not done: no `slipnet://` import, no payload cap, no profile key, no
+new dependency, no live run. Not touched, worth a later look: the redial failure log still
+says `dial tls:` for plain TCP (shared DoT path); `internal/resolvers/presets.go` still
+lists `(doh:, dot:, udp:)` in its "no transport" hint; `doc/architecture.md` §04 still
+lists `DoH | DoT | UDP` in the `Resolver` comment.

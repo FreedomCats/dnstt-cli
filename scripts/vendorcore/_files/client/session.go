@@ -148,7 +148,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 		return fail(fmt.Errorf("KCP refused MTU %d", mtu))
 	}
 	fingerprint := "none"
-	if id != nil && cfg.Resolver.Transport != UDP {
+	if id != nil && cfg.Resolver.Transport != UDP && cfg.Resolver.Transport != TCP {
 		fingerprint = id.Client + " " + id.Version
 	}
 	logf("session %08x: resolver %s, MTU %d, uTLS %s", s.kcpConn.GetConv(), cfg.Resolver, mtu, fingerprint)

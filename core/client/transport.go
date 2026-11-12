@@ -26,20 +26,24 @@ import (
 // sockets.dial.
 type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// Transport is how DNS messages reach the resolver.
+// Transport is how DNS messages reach the resolver. TCP and DoT share the framed stream of
+// newTLSPacketConn; the dialer decides whether the stream runs over TLS or over plain TCP.
 type Transport string
 
 const (
 	DoH Transport = "doh" // DNS over HTTPS, RFC 8484
 	DoT Transport = "dot" // DNS over TLS, RFC 7858
 	UDP Transport = "udp" // plain DNS over UDP
+	// TCP is plain DNS over TCP, RFC 7766: the same two-octet length prefix as DoT, with
+	// no TLS and no uTLS fingerprint.
+	TCP Transport = "tcp"
 )
 
 // Resolver is the recursive resolver a session sends its queries through.
 type Resolver struct {
 	Transport Transport
-	// Address is the URL for DoH (https only) and host:port for DoT and UDP. A host name
-	// is resolved by Config.LookupIP only.
+	// Address is the URL for DoH (https only) and host:port for DoT, TCP and UDP. A host
+	// name is resolved by Config.LookupIP only.
 	Address string
 }
 
@@ -270,6 +274,37 @@ func openTransport(ctx context.Context, cfg *Config, s *sockets, id *utls.Client
 		// Only the initial setup uses ctx; later redials use their own timeout and
 		// are canceled by the session's sockets, not by this completed Dial.
 		pconn, err := newTLSPacketConn(ctx, r.Address, dialTLS, cfg.Logf)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.track(pconn); err != nil {
+			return nil, nil, err
+		}
+		return turbotunnel.DummyAddr{}, pconn, nil
+
+	case TCP:
+		host, _, err := net.SplitHostPort(r.Address)
+		if err != nil {
+			return nil, nil, fmt.Errorf("TCP address: %w", err)
+		}
+		if err := s.canLookup(host); err != nil {
+			return nil, nil, err
+		}
+		dialPlain := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// sockets.dial's bridge ends at TCP return; here the dial is the TCP
+			// connection itself, so keep the session's cancellation active until it is
+			// returned.
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			stop := context.AfterFunc(s.ctx, cancel)
+			defer stop()
+			return s.dial(ctx, network, addr)
+		}
+		// newTLSPacketConn gives the two-octet length prefix, the queues and the redial
+		// with backoff (P2); only the TLS in its name and its default dialer are about
+		// DoT. As in DoT, only the initial setup uses ctx, and later redials use their
+		// own timeout and are canceled by the session's sockets.
+		pconn, err := newTLSPacketConn(ctx, r.Address, dialPlain, cfg.Logf)
 		if err != nil {
 			return nil, nil, err
 		}

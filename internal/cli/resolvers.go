@@ -24,6 +24,9 @@ func resolversCommand() *command {
 		description: `Check resolvers: perform a real Noise handshake through every resolver of the
 profile and print the time or the reason for failure. Exit code 1 if none passes.
 
+A resolver is doh:URL, dot:host[:port], udp:host[:port] or tcp:host[:port], or a preset
+name.
+
 Subcommands:
   check [profile]   check all resolvers of the profile`,
 		run: runResolvers,

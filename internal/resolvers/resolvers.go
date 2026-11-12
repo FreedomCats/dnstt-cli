@@ -21,7 +21,7 @@ import (
 // and the addresses of its host name if they are pinned.
 type Resolver struct {
 	Transport client.Transport
-	// Address is what the core takes: the URL for DoH, host:port for DoT and UDP.
+	// Address is what the core takes: the URL for DoH, host:port for DoT, UDP and TCP.
 	Address string
 	// Pins are the addresses of the host name, in the order to try them; empty — the
 	// name is resolved by the bootstrap resolver. Never set for a host given as an
@@ -116,9 +116,9 @@ const (
 	portUDP = "53"
 )
 
-// Parse reads one entry: doh:URL, dot:host[:port], udp:host[:port], each optionally with
-// @address[,address…] that pins the addresses of a host name. A preset name is not an
-// entry: Expand takes those.
+// Parse reads one entry: doh:URL, dot:host[:port], udp:host[:port] or tcp:host[:port],
+// each optionally with @address[,address…] that pins the addresses of a host name. A
+// preset name is not an entry: Expand takes those.
 func Parse(entry string) (Resolver, error) {
 	r, err := parse(strings.TrimSpace(entry))
 	if err != nil {
@@ -130,16 +130,14 @@ func Parse(entry string) (Resolver, error) {
 func parse(entry string) (Resolver, error) {
 	prefix, rest, ok := strings.Cut(entry, ":")
 	if !ok {
-		return Resolver{}, errors.New("no transport: doh:, dot: or udp:, or a preset name")
+		return Resolver{}, errors.New("no transport: doh:, dot:, udp: or tcp:, or a preset name")
 	}
 	var r Resolver
 	switch t := client.Transport(strings.ToLower(prefix)); t {
-	case client.DoH, client.DoT, client.UDP:
+	case client.DoH, client.DoT, client.UDP, client.TCP:
 		r.Transport = t
-	case "tcp":
-		return Resolver{}, errors.New("transport tcp is not supported yet")
 	default:
-		return Resolver{}, fmt.Errorf("unknown transport %q: doh, dot or udp", prefix)
+		return Resolver{}, fmt.Errorf("unknown transport %q: doh, dot, udp or tcp", prefix)
 	}
 
 	if i := strings.LastIndexByte(rest, '@'); i >= 0 {
