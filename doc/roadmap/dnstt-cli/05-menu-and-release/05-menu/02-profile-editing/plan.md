@@ -15,7 +15,7 @@ are: check resolvers with the offer to drop the dead ones, edit resolvers, a new
 password, a new domain or key.
 
 The pieces exist and are reused, not copied: the `resolvers check` body
-(`internal/cli/resolvers.go`), the wizard's validators (`validDomainName`,
+(`internal/cli/resolvers.go`), the shared validators (`config.ValidDomainName`,
 `config.IsValidPubkey`, `resolvers.Expand`) and its secret-store pattern: the secret is
 written first, the profile second, a failed save removes the secret without printing it, and a
 failed delete names the error without the value (`internal/cli/wizard.go:91-122`). `profile

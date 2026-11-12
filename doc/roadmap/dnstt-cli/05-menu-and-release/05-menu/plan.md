@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 9ce7e2f
 depends: [04-slipnet-import]
 ---
 

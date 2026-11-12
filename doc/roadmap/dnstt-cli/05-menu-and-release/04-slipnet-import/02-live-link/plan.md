@@ -70,9 +70,11 @@ only evidence for the format.
 3. **The link file and its shape.** For each kind, create `<run-id>/<kind>/` with `cfg/` and
    `out/` (0700 each) and write `<kind>/link.txt` (0600) from the chat value — with a hidden
    `read -rs` in an interactive shell or the executor's file-writing tool; never with `echo`, a
-   here-document in an interactive shell or an argument; `chmod 600`; clear the variable. A line
-   wrapped by the chat or the terminal is fine: the parser removes ASCII whitespace inside the
-   payload, and this step does the same. Record the shape, and only the shape: strip the scheme
+   here-document in an interactive shell or an argument; `chmod 600`; clear the variable. A soft
+   wrap is fine: the parser removes ASCII whitespace inside the payload, and this step does the
+   same. A link broken by a hard newline is not joined — the stdin path reads one link per line
+   — so such a value is recorded as damaged, not repaired. Record the shape, and only the shape:
+   strip the scheme
    (case-insensitively), base64-decode the payload and print `version=<field 0>
    fields=<field count>` into `<kind>/shape.txt`; decode with the standard alphabet first, and
    on failure translate `-`/`_` to `+`/`/` and add the padding, as the parser does; if it still
