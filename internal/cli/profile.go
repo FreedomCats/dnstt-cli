@@ -23,22 +23,24 @@ Subcommands:
   set <name>      edit an existing profile (interactive)
   import          import a profile from a slipnet:// link
   show <name>     show a profile
-  rm <name>       remove a profile and its stored exit password
+  rm <name>       remove a profile and its stored exit password or key
   list            list all profiles
 
 The wizard asks for the profile name (a positional name skips the question; Enter takes
-"home"), the tunnel domain, the server public key, the exit type (socks5 or http; the SSH
-exit is not implemented yet), the exit login and password, the resolvers — one per line,
+"home"), the tunnel domain, the server public key, the exit type (socks5 or http only; an
+SSH exit is written by hand), the exit login and password, the resolvers — one per line,
 Enter for "network", presets by name — and the mode: tun where the system supports it (it
 needs root to connect), otherwise socks.
 
 The import subcommand asks for a slipnet:// link by hidden input in a terminal, re-asking
 after a bad paste, and reads one link per line from stdin otherwise. A dnstt link becomes
-a socks5 exit; a password dnstt_ssh link becomes an ssh exit that connects only after
-stage 06-ssh-exit. A key-based dnstt_ssh link is not imported yet, and NoizDNS (sayedns)
-and slipnet-enc:// links are refused.
+a socks5 exit. A dnstt_ssh link is refused as a warning or an error, because it carries no
+exit.host_key and the profile it would make does not load; NoizDNS (sayedns) and
+slipnet-enc:// links are refused too.
 
-The exit password goes to the secret store; profiles.toml holds only a reference to it.`,
+The exit password and key go to the secret store; profiles.toml holds only a reference to
+them. A hand-written SSH exit needs exit.user, exit.host_key and exactly one of
+exit.password_ref and exit.key_ref.`,
 		run: runProfile,
 	}
 }
@@ -160,8 +162,14 @@ func runProfileShow(_ context.Context, e *env, args []string) error {
 	if prof.Exit.User != "" {
 		fmt.Fprintf(e.stdout, "  Exit User: %s\n", prof.Exit.User)
 	}
+	if prof.Exit.HostKey != "" {
+		fmt.Fprintf(e.stdout, "  Exit Host Key: %s\n", prof.Exit.HostKey)
+	}
 	if prof.Exit.PasswordRef != "" {
 		fmt.Fprintf(e.stdout, "  Exit Password: (stored in %s)\n", prof.Exit.PasswordRef)
+	}
+	if prof.Exit.KeyRef != "" {
+		fmt.Fprintf(e.stdout, "  Exit Key: (stored in %s)\n", prof.Exit.KeyRef)
 	}
 	if prof.Socks.Listen != "" {
 		fmt.Fprintf(e.stdout, "  SOCKS Listen: %s\n", prof.Socks.Listen)
@@ -204,18 +212,35 @@ func runProfileRm(_ context.Context, e *env, args []string) error {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
-	// The secret goes first: a secret whose profile is gone stays in the store with
+	// The secrets go first: a secret whose profile is gone stays in the store with
 	// nothing pointing at it, and no command can find it again. A profile left without
-	// its secret is visible in profiles.toml, and the command can say so.
-	ref := prof.Exit.PasswordRef
-	if ref != "" {
-		store, err := newSecretStore()
-		if err != nil {
-			return fmt.Errorf("profile %q was not removed: cannot open the secret store: %w", name, err)
+	// its secret is visible in profiles.toml, and the command can say so. An ssh profile
+	// has exactly one of the two references and a socks5 or http profile at most the
+	// password, so at most one secret is deleted here; the loop covers whichever
+	// reference the profile carries.
+	var store config.SecretStore
+	var deleted []string
+	for _, secret := range []struct {
+		ref  string
+		what string
+		fail string
+	}{
+		{prof.Exit.PasswordRef, "exit password", "the exit password could not be deleted from the secret store"},
+		{prof.Exit.KeyRef, "exit key", "the exit key could not be deleted from the secret store"},
+	} {
+		if secret.ref == "" {
+			continue
 		}
-		if err := store.Delete(ref); err != nil {
-			return fmt.Errorf("profile %q was not removed: the exit password could not be deleted from the secret store: %w", name, err)
+		if store == nil {
+			store, err = newSecretStore()
+			if err != nil {
+				return fmt.Errorf("profile %q was not removed: cannot open the secret store: %w", name, err)
+			}
 		}
+		if err := store.Delete(secret.ref); err != nil {
+			return fmt.Errorf("profile %q was not removed: %s: %w", name, secret.fail, err)
+		}
+		deleted = append(deleted, secret.what)
 	}
 
 	delete(profiles.Profile, name)
@@ -230,11 +255,16 @@ func runProfileRm(_ context.Context, e *env, args []string) error {
 	}
 
 	if err := saveProfiles(profiles); err != nil {
-		if ref == "" {
+		switch len(deleted) {
+		case 0:
 			return err
+		case 1:
+			return errors.Join(err, fmt.Errorf(
+				"profile %q was not removed from profiles.toml, but its %s was removed from the secret store", name, deleted[0]))
+		default:
+			return errors.Join(err, fmt.Errorf(
+				"profile %q was not removed from profiles.toml, but its %s were removed from the secret store", name, strings.Join(deleted, " and ")))
 		}
-		return errors.Join(err, fmt.Errorf(
-			"profile %q was not removed from profiles.toml, but its exit password was removed from the secret store", name))
 	}
 
 	fmt.Fprintf(e.stdout, "Profile %q removed.\n", name)

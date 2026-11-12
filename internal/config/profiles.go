@@ -10,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/FreedomCats/dnstt-cli/internal/exit"
 	"github.com/FreedomCats/dnstt-cli/internal/resolvers"
 )
 
@@ -50,6 +51,12 @@ type Exit struct {
 	Type        string `toml:"type"`
 	User        string `toml:"user"`
 	PasswordRef string `toml:"password_ref"`
+	// KeyRef is the reference of the SSH exit's private key in the secret store; exactly
+	// one of KeyRef and PasswordRef is set for exit.type "ssh".
+	KeyRef string `toml:"key_ref,omitempty"`
+	// HostKey is the pinned fingerprint of the SSH exit's host key, SHA256:…; required for
+	// exit.type "ssh", refused with any other type. Normalized by exit.ParseFingerprint.
+	HostKey string `toml:"host_key,omitempty"`
 	// OneWrite is the one-write SOCKS5 exchange: the greeting, the login and the CONNECT in
 	// one Write. It applies to exit.type "socks5" (an empty type counts) and to the
 	// datapath only, never to the startup check, which has no target. Off by default.
@@ -215,21 +222,54 @@ func validateProfile(name string, p *Profile) error {
 		}
 	}
 
-	// Validate exit type.
-	if p.Exit.Type != "" && p.Exit.Type != "socks5" && p.Exit.Type != "http" && p.Exit.Type != "ssh" {
+	// Validate exit type. The effective type is taken first: an empty type is socks5, and
+	// the messages must not print an empty type.
+	exitType := p.Exit.Type
+	if exitType == "" {
+		exitType = "socks5"
+	}
+	if exitType != "socks5" && exitType != "http" && exitType != "ssh" {
 		errs = append(errs, fmt.Errorf("%s: exit.type must be \"socks5\", \"http\" or \"ssh\"", prefix))
 	}
 	// exit.one_write applies to SOCKS5 only. The false value stays valid with every type:
 	// saved profiles carry one_write = false in every exit section.
-	if p.Exit.OneWrite && p.Exit.Type != "" && p.Exit.Type != "socks5" {
-		errs = append(errs, fmt.Errorf("%s: exit.one_write applies to exit.type \"socks5\" only, not %q", prefix, p.Exit.Type))
+	if p.Exit.OneWrite && exitType != "socks5" {
+		errs = append(errs, fmt.Errorf("%s: exit.one_write applies to exit.type \"socks5\" only, not %q", prefix, exitType))
 	}
-	if p.Exit.Type == "http" {
+	switch exitType {
+	case "http":
 		if strings.Contains(p.Exit.User, ":") || strings.ContainsFunc(p.Exit.User, unicode.IsControl) {
 			errs = append(errs, fmt.Errorf("%s: HTTP exit: invalid user", prefix))
 		}
 		if p.Exit.PasswordRef != "" && p.Exit.User == "" {
 			errs = append(errs, fmt.Errorf("%s: HTTP exit: password_ref requires a user", prefix))
+		}
+	case "ssh":
+		if strings.TrimSpace(p.Exit.User) == "" {
+			errs = append(errs, fmt.Errorf("%s: exit.user is required for exit.type \"ssh\"", prefix))
+		} else if strings.ContainsFunc(p.Exit.User, unicode.IsControl) {
+			errs = append(errs, fmt.Errorf("%s: exit.user must not contain control characters", prefix))
+		}
+		if p.Exit.HostKey == "" {
+			errs = append(errs, fmt.Errorf("%s: exit.host_key is required for exit.type \"ssh\"", prefix))
+		} else if _, err := exit.ParseFingerprint(p.Exit.HostKey); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", prefix, err))
+		}
+		switch {
+		case p.Exit.PasswordRef != "" && p.Exit.KeyRef != "":
+			errs = append(errs, fmt.Errorf("%s: exit.type \"ssh\" takes exit.password_ref or exit.key_ref, not both", prefix))
+		case p.Exit.PasswordRef == "" && p.Exit.KeyRef == "":
+			errs = append(errs, fmt.Errorf("%s: exit.type \"ssh\" needs exactly one of exit.password_ref and exit.key_ref", prefix))
+		}
+	}
+	// host_key and key_ref belong to the SSH exit alone, like every unknown or misplaced
+	// key in this project.
+	if exitType != "ssh" {
+		if p.Exit.HostKey != "" {
+			errs = append(errs, fmt.Errorf("%s: exit.host_key applies to exit.type \"ssh\" only, not %q", prefix, exitType))
+		}
+		if p.Exit.KeyRef != "" {
+			errs = append(errs, fmt.Errorf("%s: exit.key_ref applies to exit.type \"ssh\" only, not %q", prefix, exitType))
 		}
 	}
 
@@ -265,27 +305,39 @@ func IsValidPubkey(s string) bool {
 // checkForSecretValues detects if a password or key value was written directly into the
 // TOML instead of a reference. This is an error: secrets must go to the secret store.
 func checkForSecretValues(prefix string, p *Profile) error {
-	// The only field that should contain a reference is password_ref.
-	// If password_ref looks like a plain password (not a reference), it's an error.
+	var errs []error
 	if p.Exit.PasswordRef != "" {
-		ref := strings.TrimSpace(p.Exit.PasswordRef)
-		// A reference has the form <scheme>:<id>. If it doesn't contain ":", or if it
-		// looks too long or too short, it might be a password.
-		if !strings.Contains(ref, ":") {
-			return fmt.Errorf("%s: exit.password_ref must be a reference (<scheme>:<id>), not a password value", prefix)
-		}
-		parts := strings.SplitN(ref, ":", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return fmt.Errorf("%s: exit.password_ref must be a reference (<scheme>:<id>), not a password value", prefix)
-		}
-		// If the "id" part is longer than 100 characters or contains spaces, it's likely
-		// a password.
-		id := parts[1]
-		if len(id) > 100 || strings.Contains(id, " ") {
-			return fmt.Errorf("%s: exit.password_ref looks like a password value, not a reference", prefix)
+		if err := checkRefValue(prefix, "exit.password_ref", p.Exit.PasswordRef); err != nil {
+			errs = append(errs, err)
 		}
 	}
+	if p.Exit.KeyRef != "" {
+		if err := checkRefValue(prefix, "exit.key_ref", p.Exit.KeyRef); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
+// checkRefValue checks that value is a reference of the form <scheme>:<id> and not the
+// secret itself. The messages name the field and never repeat the value.
+func checkRefValue(prefix, field, value string) error {
+	ref := strings.TrimSpace(value)
+	// A reference has the form <scheme>:<id>. If it doesn't contain ":", or if it
+	// looks too long or too short, it might be the secret.
+	if !strings.Contains(ref, ":") {
+		return fmt.Errorf("%s: %s must be a reference (<scheme>:<id>), not a secret value", prefix, field)
+	}
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return fmt.Errorf("%s: %s must be a reference (<scheme>:<id>), not a secret value", prefix, field)
+	}
+	// If the "id" part is longer than 100 characters or contains spaces, it's likely
+	// a secret.
+	id := parts[1]
+	if len(id) > 100 || strings.Contains(id, " ") {
+		return fmt.Errorf("%s: %s looks like a secret value, not a reference", prefix, field)
+	}
 	return nil
 }
 
@@ -340,6 +392,8 @@ func checkProfileKeys(profileName string, data map[string]any) error {
 		"type":         true,
 		"user":         true,
 		"password_ref": true,
+		"key_ref":      true,
+		"host_key":     true,
 		"one_write":    true,
 	}
 

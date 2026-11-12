@@ -436,7 +436,7 @@ func TestWizardReasks(t *testing.T) {
 			name:     "ssh exit",
 			answers:  insertAnswers(socks, 3, scriptedAnswer{value: "ssh"}),
 			wantExit: "socks5", wantMode: "tun",
-			wantOut: "the SSH exit is not implemented yet (stage E5); choose socks5 or http",
+			wantOut: "the wizard offers socks5 and http only; write an SSH exit by hand",
 		},
 		{
 			name:     "unknown exit type",

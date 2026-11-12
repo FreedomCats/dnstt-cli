@@ -21,10 +21,13 @@ tun_dns      = "1.1.1.1"                    # DNS behind the server for tun mode
 payload_size = 0                            # cap on the payload per query, bytes; 0 — the domain's maximum
 
 [profile.home.exit]
-type         = "socks5"                     # socks5 | http | ssh (ssh is stage E5)
+type         = "socks5"                     # socks5 | http | ssh
 user         = "user"                       # Exit username; empty — no authentication
 password_ref = "secretservice:0123456789abcdef"  # Reference to exit password in secret store
 one_write    = false                       # socks5 only: greeting, login and CONNECT in one write (off by default)
+# An ssh exit needs user and host_key (the server's SHA256 fingerprint, as ssh-keygen -lf
+# prints it) and exactly one of password_ref or key_ref (the private key in PEM, decrypted,
+# in the secret store).
 
 [profile.home.socks]
 listen       = "127.0.0.1:1080"             # Local SOCKS5 proxy address

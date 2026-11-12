@@ -216,64 +216,96 @@ func TestProfileImportStdinSameNameTwice(t *testing.T) {
 	}
 }
 
-func TestProfileImportStdinSSHPassword(t *testing.T) {
+// Every dnstt_ssh link is refused: a link carries no exit.host_key, and an SSH profile
+// without one does not load. On stdin the line is a warning and the other lines import.
+func TestProfileImportStdinSSHRefused(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	store := newFakeSecretStore()
 	withFakeStore(t, store)
 
-	code, stdout, stderr := runCLIInput(t, importSSHLink(map[int]string{2: "ssh-home"})+"\n", "profile", "import")
+	const keyMaterial = "synthetic-private-key-material"
+	keyLink := importSSHLink(map[int]string{
+		2:  "ssh-key-home",
+		23: "key",
+		24: base64.StdEncoding.EncodeToString([]byte(keyMaterial)),
+	})
+	input := importDnsttLink(map[int]string{2: "home"}) + "\n" +
+		importSSHLink(map[int]string{2: "ssh-home"}) + "\n" +
+		keyLink + "\n"
+	code, stdout, stderr := runCLIInput(t, input, "profile", "import")
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
 	}
-	if !strings.Contains(stdout, `Profile "ssh-home" imported (exit ssh).`) {
-		t.Fatalf("output does not report the SSH import:\n%s", stdout)
+	if got := strings.Count(stderr, "exit.host_key"); got != 2 {
+		t.Fatalf("stderr names exit.host_key %d times, want 2:\n%s", got, stderr)
 	}
-	if !strings.Contains(stdout, "06-ssh-exit") {
-		t.Fatalf("output does not say when the profile connects:\n%s", stdout)
+	if !strings.Contains(stderr, "the profile is not stored") {
+		t.Fatalf("the warning does not say the profile was not stored:\n%s", stderr)
+	}
+	if strings.Contains(stderr, importTestSSHPassword) || strings.Contains(stderr, keyMaterial) {
+		t.Fatalf("the refusal repeats the link's values:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, `Profile "home" imported (exit socks5).`) {
+		t.Fatalf("the dnstt link was not imported:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "exit ssh") {
+		t.Fatalf("an SSH profile was imported:\n%s", stdout)
 	}
 
 	profiles, err := config.LoadProfilesFrom(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	prof := profiles.Profile["ssh-home"]
-	if prof == nil {
-		t.Fatal("profile ssh-home not found")
+	if profiles.Profile["home"] == nil {
+		t.Fatal("the dnstt profile was not saved")
 	}
-	if prof.Exit.Type != "ssh" || prof.Exit.User != "synthetic-ssh-user" || prof.Exit.PasswordRef != "file:ssh-home.password" {
-		t.Fatalf("exit incomplete: %+v", prof.Exit)
+	if len(profiles.Profile) != 1 {
+		t.Fatalf("profiles = %v, want only home", profiles.Profile)
 	}
-	if got := store.values["ssh-home.password"]; got != importTestSSHPassword {
-		t.Fatal("the store did not get the SSH password")
+	if store.puts != 0 || len(store.values) != 0 {
+		t.Fatal("a refused link wrote a secret")
 	}
 }
 
-func TestProfileImportStdinSSHKeyRefused(t *testing.T) {
+// Interactively a dnstt_ssh link is printed and the question repeats; a dnstt link after
+// it still imports.
+func TestProfileImportInteractiveSSHRefused(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	store := newFakeSecretStore()
 	withFakeStore(t, store)
 
-	const keyMaterial = "synthetic-private-key-material"
-	link := importSSHLink(map[int]string{
-		2:  "ssh-home",
-		23: "key",
-		24: base64.StdEncoding.EncodeToString([]byte(keyMaterial)),
-	})
-	code, _, stderr := runCLIInput(t, link+"\n", "profile", "import")
-	if code != exitError {
-		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	e, out, _ := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importSSHLink(map[int]string{2: "ssh-home"})},
+		{secret: true, value: importDnsttLink(nil)},
+		{secret: true, value: ""},
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "06-ssh-exit") {
-		t.Fatalf("the refusal does not name the stage:\n%s", stderr)
+	if err := importInteractive(context.Background(), e, profiles, store, p); err != nil {
+		t.Fatalf("importInteractive = %v", err)
 	}
-	if strings.Contains(stderr, importTestSSHPassword) || strings.Contains(stderr, keyMaterial) {
-		t.Fatalf("the refusal repeats the link's values:\n%s", stderr)
+	if !strings.Contains(out.String(), "exit.host_key") {
+		t.Fatalf("the refusal does not name exit.host_key:\n%s", out.String())
 	}
-	if store.puts != 0 || len(store.values) != 0 {
+	if len(p.asked) != 3 || p.asked[0] != p.asked[1] {
+		t.Fatalf("the question did not repeat after the refused link: %q", p.asked)
+	}
+
+	saved, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Profile["home"] == nil {
+		t.Fatal("the dnstt link after the refused one was not imported")
+	}
+	if saved.Profile["ssh-home"] != nil {
+		t.Fatal("the refused SSH link was saved")
+	}
+	if store.puts != 0 {
 		t.Fatal("the refused link wrote a secret")
-	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the refused link wrote profiles.toml: %v", err)
 	}
 }
 

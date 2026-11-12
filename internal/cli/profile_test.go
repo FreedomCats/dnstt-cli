@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/FreedomCats/dnstt-cli/core/dns"
 	"github.com/FreedomCats/dnstt-cli/core/server"
@@ -251,6 +256,25 @@ func TestProfileHelpDescribesWizard(t *testing.T) {
 	}
 }
 
+// generatedSSHKey returns a generated ed25519 private key in OpenSSH PEM. No fixture and no
+// real key: the tests need the value only to prove the wiring.
+func generatedSSHKey(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(block))
+}
+
+// cliTestHostKey is a syntactically valid pinned fingerprint: SHA256: and 43 base64
+// characters, the encoding of 32 zero bytes. No server is reached.
+var cliTestHostKey = "SHA256:" + strings.Repeat("A", 43)
+
 // twoProfileFixture writes profiles.toml with an authenticated default "home" whose exit
 // password is in the store, and a no-auth "work". It returns the profiles path and the
 // reference; the scheme is the platform's, so the reference is what Put returned.
@@ -334,6 +358,102 @@ func TestProfileRmDeletesSecret(t *testing.T) {
 	if strings.Contains(string(raw), "home.password") {
 		t.Fatal("secrets.json still names the removed profile's secret")
 	}
+}
+
+// Removing an SSH profile deletes its stored key before the profile, and leaves the other
+// profile and its password alone.
+func TestProfileRmDeletesSSHKey(t *testing.T) {
+	path, passwordRef := twoProfileFixture(t)
+	store := config.NewSecretStoreFor(path)
+	keyRef, err := store.Put("ssh.key", generatedSSHKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles.Profile["ssh"] = &config.Profile{
+		Domain:    "s.example.com",
+		Pubkey:    wizardTestPubkey,
+		Resolvers: []string{"network"},
+		Exit:      config.Exit{Type: "ssh", User: "synthetic-user", HostKey: cliTestHostKey, KeyRef: keyRef},
+	}
+	if err := config.SaveProfilesTo(path, profiles); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLIInput(t, "", "profile", "rm", "ssh")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, `Profile "ssh" removed.`) {
+		t.Fatalf("stdout does not report the removal:\n%s", stdout)
+	}
+	if _, err := store.Get(keyRef); err == nil {
+		t.Fatal("the exit key is still in the secret store")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), config.SecretsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "ssh.key") {
+		t.Fatal("secrets.json still names the removed profile's key")
+	}
+
+	// The other profile and its password are untouched.
+	profiles, err = config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profiles.Profile["home"] == nil || profiles.Profile["work"] == nil {
+		t.Fatalf("the removal disturbed the other profiles: %v", profiles.Profile)
+	}
+	if _, ok := profiles.Profile["ssh"]; ok {
+		t.Fatal("profile ssh is still in profiles.toml")
+	}
+	if got, err := store.Get(passwordRef); err != nil || got != wizardTestPassword {
+		t.Fatalf("the home password was disturbed: %q, %v", got, err)
+	}
+}
+
+// A failed delete of the key keeps the profile, like the password case, and names the key.
+func TestProfileRmKeepsProfileWhenKeyDeleteFails(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "ssh",
+		Profile: map[string]*config.Profile{"ssh": {
+			Domain:    "s.example.com",
+			Pubkey:    wizardTestPubkey,
+			Resolvers: []string{"network"},
+			Exit:      config.Exit{Type: "ssh", User: "synthetic-user", HostKey: cliTestHostKey, KeyRef: "file:ssh.key"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake := newFakeSecretStore()
+	fake.deleteErr = errors.New("synthetic delete failure")
+	old := newSecretStore
+	newSecretStore = func() (config.SecretStore, error) { return fake, nil }
+	t.Cleanup(func() { newSecretStore = old })
+
+	code, _, stderr := runCLIInput(t, "", "profile", "rm", "ssh")
+	if code != exitError {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "was not removed") ||
+		!strings.Contains(stderr, "the exit key could not be deleted from the secret store") {
+		t.Fatalf("stderr does not report the key delete failure:\n%s", stderr)
+	}
+	if fake.deletes != 1 || len(fake.deleted) != 1 || fake.deleted[0] != "file:ssh.key" {
+		t.Fatalf("Delete calls = %d %v, want exactly the key reference", fake.deletes, fake.deleted)
+	}
+	assertRemovalLeftProfilesUnchanged(t, path, before, stderr)
 }
 
 func TestProfileRmWithoutPasswordRefLeavesStoreClosed(t *testing.T) {

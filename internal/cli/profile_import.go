@@ -185,11 +185,7 @@ func importLink(link *config.Link, name string, profiles *config.Profiles, store
 	return prof, nil
 }
 
-// reportImportedProfile says what was imported, never its password or link. A dnstt_ssh
-// profile is stored but cannot connect until the SSH exit stage exists.
+// reportImportedProfile says what was imported, never its password or link.
 func reportImportedProfile(e *env, name string, prof *config.Profile) {
 	fmt.Fprintf(e.stdout, "Profile %q imported (exit %s).\n", name, prof.Exit.Type)
-	if prof.Exit.Type == "ssh" {
-		fmt.Fprintln(e.stdout, "The SSH exit connects only after stage 06-ssh-exit; the profile is stored and cannot connect yet.")
-	}
 }

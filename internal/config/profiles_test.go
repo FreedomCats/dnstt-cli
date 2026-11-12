@@ -12,6 +12,11 @@ import (
 	"github.com/FreedomCats/dnstt-cli/internal/sudo"
 )
 
+// sshTestHostKey is a syntactically valid pinned fingerprint: SHA256: and 43 base64
+// characters, as ssh-keygen -lf prints it. It is the encoding of 32 zero bytes, not a real
+// host key.
+var sshTestHostKey = "SHA256:" + strings.Repeat("A", 43)
+
 // TestProfilesRoundTrip tests saving and loading profiles.
 func TestProfilesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
@@ -35,6 +40,17 @@ func TestProfilesRoundTrip(t *testing.T) {
 				},
 				Socks: Socks{
 					Listen: "127.0.0.1:1080",
+				},
+			},
+			"ssh": {
+				Domain:    "s.example.com",
+				Pubkey:    strings.Repeat("01", 32),
+				Resolvers: []string{"network"},
+				Exit: Exit{
+					Type:    "ssh",
+					User:    "synthetic-user",
+					HostKey: sshTestHostKey,
+					KeyRef:  "file:synthetic-key-id",
 				},
 			},
 		},
@@ -69,6 +85,34 @@ func TestProfilesRoundTrip(t *testing.T) {
 	}
 	if home.Exit.PasswordRef != "secretservice:0123456789abcdef" {
 		t.Errorf("exit.password_ref: got %q", home.Exit.PasswordRef)
+	}
+	// A socks5 profile saved without the SSH fields must not gain an empty key: the file
+	// has one host_key and one key_ref, both in the ssh section.
+	if home.Exit.HostKey != "" || home.Exit.KeyRef != "" {
+		t.Errorf("the socks5 exit gained the SSH fields: %+v", home.Exit)
+	}
+	ssh := loaded.Profile["ssh"]
+	if ssh == nil {
+		t.Fatal("profile ssh not found")
+	}
+	if ssh.Exit.Type != "ssh" || ssh.Exit.User != "synthetic-user" {
+		t.Errorf("ssh exit: got %+v", ssh.Exit)
+	}
+	if ssh.Exit.HostKey != sshTestHostKey {
+		t.Errorf("exit.host_key: got %q, want %q", ssh.Exit.HostKey, sshTestHostKey)
+	}
+	if ssh.Exit.KeyRef != "file:synthetic-key-id" {
+		t.Errorf("exit.key_ref: got %q", ssh.Exit.KeyRef)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(raw), "host_key"); got != 1 {
+		t.Errorf("the file names host_key %d times, want once (in the ssh exit):\n%s", got, raw)
+	}
+	if got := strings.Count(string(raw), "key_ref"); got != 1 {
+		t.Errorf("the file names key_ref %d times, want once (in the ssh exit):\n%s", got, raw)
 	}
 }
 
@@ -342,7 +386,7 @@ func TestProfileOneWriteValidation(t *testing.T) {
 		{"http true", Exit{Type: "http", User: "synthetic-user", OneWrite: true}, `exit.one_write applies to exit.type "socks5" only, not "http"`},
 		{"ssh true", Exit{Type: "ssh", OneWrite: true}, `exit.one_write applies to exit.type "socks5" only, not "ssh"`},
 		{"http false", Exit{Type: "http", User: "synthetic-user", PasswordRef: "file:synthetic-id"}, ""},
-		{"ssh false", Exit{Type: "ssh"}, ""},
+		{"ssh false", Exit{Type: "ssh", User: "synthetic-user", HostKey: sshTestHostKey, PasswordRef: "file:synthetic-id"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: tc.exit}
@@ -453,7 +497,7 @@ func TestHTTPProfileValidation(t *testing.T) {
 		{"default", Exit{}, ""},
 		{"SOCKS5 colon and control", Exit{Type: "socks5", User: "user:\r"}, ""},
 		{"SOCKS5 reference without user", Exit{Type: "socks5", PasswordRef: "file:synthetic-id"}, ""},
-		{"SSH deferred", Exit{Type: "ssh"}, ""},
+		{"SSH without fields", Exit{Type: "ssh"}, `exit.user is required for exit.type "ssh"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: tc.exit}
@@ -483,6 +527,95 @@ func TestHTTPProfileValidation(t *testing.T) {
 				t.Fatalf("invalid HTTP profile load = %v", err)
 			}
 		})
+	}
+}
+
+// The SSH exit rules of architecture.md §10: the user and the pinned fingerprint are
+// required, exactly one credential is set, and both SSH fields are refused with any other
+// exit type. Every message names the field and repeats no value.
+func TestSSHProfileValidation(t *testing.T) {
+	const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic-key-material\n-----END OPENSSH PRIVATE KEY-----"
+	valid := func() Exit {
+		return Exit{Type: "ssh", User: "synthetic-user", HostKey: sshTestHostKey, PasswordRef: "file:synthetic-id"}
+	}
+	for _, tc := range []struct {
+		name string
+		exit Exit
+		want []string
+	}{
+		{"missing user", func() Exit { e := valid(); e.User = ""; return e }(), []string{`exit.user is required for exit.type "ssh"`}},
+		{"control in user", func() Exit { e := valid(); e.User = "synthetic\ruser"; return e }(), []string{"exit.user must not contain control characters"}},
+		{"missing host key", func() Exit { e := valid(); e.HostKey = ""; return e }(), []string{`exit.host_key is required for exit.type "ssh"`}},
+		{"MD5 fingerprint", func() Exit { e := valid(); e.HostKey = "aa:bb:cc:dd"; return e }(), []string{"exit.host_key: the pinned fingerprint must be SHA256"}},
+		{"junk fingerprint", func() Exit { e := valid(); e.HostKey = "synthetic-junk"; return e }(), []string{"exit.host_key: the pinned fingerprint"}},
+		{"both references", func() Exit { e := valid(); e.KeyRef = "file:synthetic-key-id"; return e }(), []string{"takes exit.password_ref or exit.key_ref, not both"}},
+		{"both references are values", func() Exit {
+			e := valid()
+			e.PasswordRef, e.KeyRef = "synthetic-password-value", "synthetic-key-value"
+			return e
+		}(), []string{"exit.password_ref must be a reference", "exit.key_ref must be a reference"}},
+		{"neither reference", func() Exit { e := valid(); e.PasswordRef = ""; return e }(), []string{"needs exactly one of exit.password_ref and exit.key_ref"}},
+		{"key_ref is PEM", func() Exit { e := valid(); e.PasswordRef = ""; e.KeyRef = pem; return e }(), []string{"exit.key_ref must be a reference"}},
+		{"key_ref without a scheme", func() Exit { e := valid(); e.PasswordRef = ""; e.KeyRef = "synthetic-key"; return e }(), []string{"exit.key_ref must be a reference"}},
+		{"host key on socks5", Exit{Type: "socks5", HostKey: sshTestHostKey}, []string{`exit.host_key applies to exit.type "ssh" only, not "socks5"`}},
+		{"key ref on socks5", Exit{Type: "socks5", KeyRef: "file:synthetic-id"}, []string{`exit.key_ref applies to exit.type "ssh" only, not "socks5"`}},
+		{"host key on the default type", Exit{HostKey: sshTestHostKey}, []string{`exit.host_key applies to exit.type "ssh" only, not "socks5"`}},
+		{"host key on http", Exit{Type: "http", User: "synthetic-user", HostKey: sshTestHostKey}, []string{`exit.host_key applies to exit.type "ssh" only, not "http"`}},
+		{"key ref on http", Exit{Type: "http", User: "synthetic-user", KeyRef: "file:synthetic-id"}, []string{`exit.key_ref applies to exit.type "ssh" only, not "http"`}},
+		{"one_write on ssh", func() Exit { e := valid(); e.OneWrite = true; return e }(), []string{`exit.one_write applies to exit.type "socks5" only, not "ssh"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: tc.exit}
+			err := validateProfiles(&Profiles{DefaultProfile: "home", Profile: map[string]*Profile{"home": p}})
+			if err == nil {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			}
+			for _, value := range []string{"synthetic", "aa:bb"} {
+				if strings.Contains(err.Error(), value) {
+					t.Fatalf("validation repeated the value %q: %v", value, err)
+				}
+			}
+			if err := SaveProfilesTo(filepath.Join(t.TempDir(), FileName), &Profiles{Profile: map[string]*Profile{"home": p}}); err == nil {
+				t.Fatal("saved an invalid SSH profile")
+			}
+		})
+	}
+}
+
+// host_key and key_ref are known exit keys, so a misplaced one is the rule's error, not
+// "unknown key".
+func TestSSHFieldsOnSocks5AreRuleErrors(t *testing.T) {
+	raw := fmt.Sprintf(`[profile.home]
+domain = "t.example.com"
+pubkey = %q
+[profile.home.exit]
+type = "socks5"
+host_key = %q
+key_ref = "file:synthetic-key-id"
+`, strings.Repeat("01", 32), sshTestHostKey)
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadProfilesFrom(path)
+	if err == nil {
+		t.Fatal("a socks5 exit with the SSH fields loaded")
+	}
+	for _, want := range []string{
+		`exit.host_key applies to exit.type "ssh" only, not "socks5"`,
+		`exit.key_ref applies to exit.type "ssh" only, not "socks5"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("load = %v, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("a known exit key was reported as unknown: %v", err)
 	}
 }
 

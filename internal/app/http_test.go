@@ -71,7 +71,7 @@ func TestBuildHTTPExitCredentials(t *testing.T) {
 			if err != nil || tun.Supervisor.State() != supervisor.StateIdle {
 				t.Fatalf("BuildTunnel = %v, %v", tun, err)
 			}
-			h := tun.Exit.(*httpExit).dialer.(*exit.HTTP)
+			h := tun.Exit.(*fatalExit).dialer.(*exit.HTTP)
 			if h.User != tc.user || h.Password != tc.password || h.Open == nil {
 				t.Error("HTTP credentials or opener were not bound at construction")
 			}
@@ -115,12 +115,6 @@ func TestBuildOtherExitContracts(t *testing.T) {
 				t.Fatalf("BuildDatapath replaced the opener: %v", err)
 			}
 		})
-	}
-	if _, err := buildTunnel(TunnelOptions{Profile: testProfile(config.Exit{Type: "ssh", PasswordRef: "file:synthetic-id"})}, func(string) (string, error) {
-		t.Fatal("SSH opened the secret store")
-		return "", nil
-	}); err == nil || err.Error() != "SSH exit is not implemented yet (stage E5)" {
-		t.Fatalf("SSH error changed: %v", err)
 	}
 }
 
@@ -416,7 +410,7 @@ func TestSOCKS5OneWriteDroppedBatch(t *testing.T) {
 func TestHTTPExitSignalsOnce(t *testing.T) {
 	want := &exit.LoginError{}
 	var signals atomic.Int32
-	h := &httpExit{dialer: appDialerFunc(func(context.Context, string) (net.Conn, error) {
+	h := &fatalExit{dialer: appDialerFunc(func(context.Context, string) (net.Conn, error) {
 		return nil, want
 	}), fatal: func(err error) {
 		if err != want {
@@ -592,7 +586,7 @@ func TestHTTPFatalReplyDuringShutdown(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	h := tun.Exit.(*httpExit)
+	h := tun.Exit.(*fatalExit)
 	fatal := h.fatal
 	h.fatal = func(err error) {
 		fatal(err)

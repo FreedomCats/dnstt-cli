@@ -52,6 +52,59 @@ func TestProfileShowPayloadSize(t *testing.T) {
 	}
 }
 
+// An SSH profile prints the pinned fingerprint and the secret's reference, never the key
+// itself, with and without -full.
+func TestProfileShowSSHKey(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := config.NewSecretStoreFor(path)
+	key := generatedSSHKey(t)
+	ref, err := store.Put("ssh-home.key", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "ssh-home",
+		Profile: map[string]*config.Profile{
+			"ssh-home": {
+				Domain:    "t.example.com",
+				Pubkey:    wizardTestPubkey,
+				Resolvers: []string{"udp:192.0.2.1:53"},
+				Exit:      config.Exit{Type: "ssh", User: "synthetic-user", HostKey: cliTestHostKey, KeyRef: ref},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A line of the key's body: the output must not contain any part of the key material.
+	lines := strings.Split(strings.TrimSpace(key), "\n")
+	body := lines[len(lines)/2]
+	for _, args := range [][]string{
+		{"profile", "show", "ssh-home"},
+		{"profile", "show", "-full", "ssh-home"},
+	} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			code, stdout, stderr := runCLIInput(t, "", args...)
+			if code != exitOK {
+				t.Fatalf("exit code %d, want %d; stdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
+			}
+			for _, want := range []string{
+				"Exit Host Key: " + cliTestHostKey,
+				"Exit Key: (stored in " + ref + ")",
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Fatalf("stdout does not contain %q:\n%s", want, stdout)
+				}
+			}
+			for _, private := range []string{"PRIVATE KEY", body} {
+				if strings.Contains(stdout, private) {
+					t.Fatalf("profile show printed the key:\n%s", stdout)
+				}
+			}
+		})
+	}
+}
+
 // An unknown flag is rejected wherever it stands; -full is accepted before or after the
 // profile name as it always was.
 func TestProfileShowFlags(t *testing.T) {

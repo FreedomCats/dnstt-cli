@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -297,21 +298,108 @@ func TestConnectSocksAcceptsProtectionFlags(t *testing.T) {
 	}
 }
 
-func TestConnectSSHDeferred(t *testing.T) {
+// An ssh profile without exit.host_key does not load: connect refuses it with the profile
+// rule's message before the tunnel is built.
+func TestConnectSSHWithoutHostKeyRefused(t *testing.T) {
 	path := isolatedConnectConfig(t)
-	p := &config.Profile{Domain: "t.example.com", Pubkey: strings.Repeat("01", 32), Exit: config.Exit{Type: "ssh"}}
-	if err := config.SaveProfilesTo(path, &config.Profiles{DefaultProfile: "home", Profile: map[string]*config.Profile{"home": p}}); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`default_profile = "home"
+[profile.home]
+domain = "t.example.com"
+pubkey = %q
+[profile.home.exit]
+type = "ssh"
+user = "synthetic-user"
+password_ref = "file:synthetic-id"
+`, strings.Repeat("01", 32))
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	code, _, stderr := runCLI(t, "connect")
-	if code != exitError || !strings.Contains(stderr, "SSH exit is not implemented yet (stage E5)") {
+	if code != exitError || !strings.Contains(stderr, "exit.host_key") ||
+		!strings.Contains(stderr, `exit.host_key is required for exit.type "ssh"`) {
 		t.Fatalf("SSH command = %d, %q", code, stderr)
 	}
 }
 
+// A valid ssh profile is not refused by the command itself: it goes through the profile
+// rules and reaches the tunnel build. No run is started and no socket is opened to a
+// server.
+func TestConnectSSHValidProfileNotRefused(t *testing.T) {
+	t.Run("missing secret", func(t *testing.T) {
+		path := isolatedConnectConfig(t)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw := fmt.Sprintf(`default_profile = "home"
+[profile.home]
+domain = "t.example.com"
+pubkey = %q
+[profile.home.exit]
+type = "ssh"
+user = "synthetic-user"
+host_key = "%s"
+password_ref = "file:synthetic-missing-id"
+`, strings.Repeat("01", 32), "SHA256:"+strings.Repeat("A", 43))
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runCLI(t, "connect")
+		if code != exitError || !strings.Contains(stderr, "exit.password_ref: cannot read the password from the secret store") {
+			t.Fatalf("SSH command = %d, %q", code, stderr)
+		}
+		if strings.Contains(stderr, "exit.host_key") {
+			t.Fatalf("a valid SSH profile was refused by its rules: %q", stderr)
+		}
+	})
+
+	// The key is in the store and parses, so the whole tunnel build succeeds; the run then
+	// stops at the datapath's own refusal, before any dial.
+	t.Run("key from the store", func(t *testing.T) {
+		path := isolatedConnectConfig(t)
+		store := config.NewSecretStoreFor(path)
+		keyRef, err := store.Put("ssh.key", generatedSSHKey(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw := fmt.Sprintf(`default_profile = "home"
+[profile.home]
+domain = "t.example.com"
+pubkey = %q
+[profile.home.exit]
+type = "ssh"
+user = "synthetic-user"
+host_key = "%s"
+key_ref = %q
+[profile.home.socks]
+listen = "not-an-address"
+`, strings.Repeat("01", 32), "SHA256:"+strings.Repeat("A", 43), keyRef)
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runCLI(t, "connect")
+		if code != exitError || !strings.Contains(stderr, "socks datapath:") {
+			t.Fatalf("SSH command = %d, %q", code, stderr)
+		}
+		for _, private := range []string{"exit.key_ref", "exit.host_key"} {
+			if strings.Contains(stderr, private) {
+				t.Fatalf("a valid SSH profile was refused by %s: %q", private, stderr)
+			}
+		}
+	})
+}
+
+// The local cleanup runs for the exits whose failure stops the tunnel: an HTTP login
+// refusal, and a refused login or a host key mismatch for ssh. Every other error belongs
+// to the application connection and must not start the shutdown.
 func TestFinishConnectOnlyDrainsHTTPLogin(t *testing.T) {
-	for _, kind := range []string{"http", "socks5", ""} {
-		for _, cause := range []error{nil, context.Canceled, &exit.LoginError{}, &exit.HTTPConnectError{StatusCode: 403}} {
+	for _, kind := range []string{"http", "ssh", "socks5", ""} {
+		for _, cause := range []error{nil, context.Canceled, &exit.LoginError{}, &exit.HostKeyError{}, &exit.HTTPConnectError{StatusCode: 403}} {
 			t.Run(fmt.Sprintf("%s/%T", kind, cause), func(t *testing.T) {
 				calls := 0
 				dp := &connectShutdown{shutdown: func(ctx context.Context) error {
@@ -326,7 +414,8 @@ func TestFinishConnectOnlyDrainsHTTPLogin(t *testing.T) {
 					t.Fatal("cleanup replaced Run's result")
 				}
 				want := 0
-				if kind == "http" && exit.IsLogin(cause) {
+				if (kind == "http" && exit.IsLogin(cause)) ||
+					(kind == "ssh" && (exit.IsLogin(cause) || exit.IsHostKeyMismatch(cause))) {
 					want = 1
 				}
 				if calls != want {

@@ -75,16 +75,13 @@ func ParseLink(text string) (*Link, error) {
 	case "dnstt":
 		exitType = "socks5"
 	case "dnstt_ssh":
-		exitType = "ssh"
+		return nil, errors.New("field 1: a dnstt_ssh link carries no exit.host_key, and an SSH profile without one does not load; the profile is not stored")
 	case "":
 		return nil, errors.New("field 1: the tunnel type is missing")
 	case "sayedns", "sayedns_ssh":
 		return nil, errors.New("field 1: NoizDNS profiles (sayedns, sayedns_ssh) are not supported: the core does not speak NoizDNS")
 	default:
 		return nil, fmt.Errorf("field 1: tunnel type %q is not supported", typ)
-	}
-	if exitType == "ssh" && strings.EqualFold(strings.TrimSpace(fieldAt(fields, 23)), "key") {
-		return nil, errors.New("a key-based dnstt_ssh link is not imported until stage 06-ssh-exit: the profile is not stored and no key is kept")
 	}
 
 	name := fieldAt(fields, 2)
@@ -103,9 +100,6 @@ func ParseLink(text string) (*Link, error) {
 	}
 
 	loginField, passwordField := 12, 13
-	if exitType == "ssh" {
-		loginField, passwordField = 15, 16
-	}
 	user := fieldAt(fields, loginField)
 	password := fieldAt(fields, passwordField)
 	if strings.TrimSpace(user) == "" {
@@ -117,14 +111,7 @@ func ParseLink(text string) (*Link, error) {
 	if password != "" && strings.ContainsFunc(password, unicode.IsControl) {
 		return nil, fmt.Errorf("field %d: the password must not contain control characters", passwordField)
 	}
-	if exitType == "ssh" {
-		if user == "" {
-			return nil, errors.New("field 15: a dnstt_ssh link needs a login")
-		}
-		if password == "" {
-			return nil, errors.New("field 16: a dnstt_ssh link needs a password, because key-based links are not imported yet")
-		}
-	} else if password != "" && user == "" {
+	if password != "" && user == "" {
 		return nil, errors.New("field 13: a password without a login is not accepted")
 	}
 

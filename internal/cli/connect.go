@@ -371,10 +371,12 @@ func killSwitchPolicy(prof *config.Profile, noKillSwitch bool) (on bool, off str
 	}
 }
 
-// A fatal HTTP refusal may stop Run before the application goroutine sends its SOCKS5
-// failure. Give accepted handshakes the usual shutdown limit without delaying FatalExit.
+// A fatal HTTP refusal or a fatal SSH failure may stop Run before the application
+// goroutine sends its SOCKS5 failure. Give accepted handshakes the usual shutdown limit
+// without delaying FatalExit.
 func finishConnect(err error, exitType string, dp interface{ Close() error }, aborted <-chan struct{}) error {
-	if exitType == "http" && exit.IsLogin(err) {
+	if (exitType == "http" && exit.IsLogin(err)) ||
+		(exitType == "ssh" && (exit.IsLogin(err) || exit.IsHostKeyMismatch(err))) {
 		if s, ok := dp.(interface{ Shutdown(context.Context) error }); ok {
 			ctx, cancel := context.WithTimeout(context.Background(), supervisor.DefaultDrainTimeout)
 			defer cancel()

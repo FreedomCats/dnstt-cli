@@ -179,31 +179,6 @@ func TestParseLinkNoAuthentication(t *testing.T) {
 	}
 }
 
-func TestParseLinkSSH(t *testing.T) {
-	link, err := ParseLink(makeLink(22, linkFields(map[int]string{
-		1:  "dnstt_ssh",
-		2:  "ssh-home",
-		15: linkTestSSHUser,
-		16: linkTestSSHPass,
-		23: "password",
-	})))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if link.Name != "ssh-home" {
-		t.Fatalf("name = %q", link.Name)
-	}
-	if link.Profile.Exit.Type != "ssh" || link.Profile.Exit.User != linkTestSSHUser {
-		t.Fatalf("exit = %+v", link.Profile.Exit)
-	}
-	if link.Profile.Exit.PasswordRef != "" {
-		t.Fatalf("password_ref = %q before the password is stored", link.Profile.Exit.PasswordRef)
-	}
-	if link.Password != linkTestSSHPass {
-		t.Fatal("the SSH password is not returned separately")
-	}
-}
-
 func TestParseLinkResolvers(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -309,10 +284,9 @@ func TestParseLinkRefusals(t *testing.T) {
 		{"sayedns_ssh names NoizDNS", linkFields(map[int]string{1: "sayedns_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass}), []string{"field 1", "NoizDNS"}},
 		{"an unknown type is named", linkFields(map[int]string{1: "vless", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 1", "vless"}},
 		{"a missing type", linkFields(map[int]string{1: ""}), []string{"field 1", "type"}},
-		{"a key-based SSH link", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass, 23: "key"}), []string{"06-ssh-exit"}},
+		{"a password dnstt_ssh link", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass}), []string{"exit.host_key", "not stored"}},
+		{"a key-based dnstt_ssh link", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass, 23: "key"}), []string{"exit.host_key", "not stored"}},
 		{"a password without a login", linkFields(map[int]string{12: "", 13: linkTestPassword}), []string{"field 13", "login"}},
-		{"an SSH password without a login", linkFields(map[int]string{1: "dnstt_ssh", 15: "", 16: linkTestSSHPass}), []string{"field 15"}},
-		{"an SSH link without a password", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: ""}), []string{"field 16"}},
 		{"a bad domain", linkFields(map[int]string{3: "bad_domain.example.com", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 3", "domain"}},
 		{"a bad key", linkFields(map[int]string{11: "not-a-key", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 11", "64 hex"}},
 		{"no resolver", linkFields(map[int]string{4: "", 37: "", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 4", "resolver"}},
@@ -351,8 +325,6 @@ func TestParseLinkControlCharactersInCredentials(t *testing.T) {
 	}{
 		{"dnstt login", linkFields(map[int]string{12: "synthetic-user" + control, 13: linkTestPassword}), "field 12"},
 		{"dnstt password", linkFields(map[int]string{12: "synthetic-user", 13: "synthetic-password" + control}), "field 13"},
-		{"ssh login", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser + control, 16: linkTestSSHPass}), "field 15"},
-		{"ssh password", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass + control}), "field 16"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseLink(makeLink(22, tc.fields))

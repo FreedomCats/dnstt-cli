@@ -267,7 +267,7 @@ func (w *wizard) askExitType(ctx context.Context) (string, error) {
 		case "http":
 			return "http", nil
 		case "ssh":
-			fmt.Fprintln(w.out, "the SSH exit is not implemented yet (stage E5); choose socks5 or http")
+			fmt.Fprintln(w.out, "the wizard offers socks5 and http only; write an SSH exit by hand")
 		default:
 			fmt.Fprintln(w.out, "the exit type must be socks5 or http")
 		}

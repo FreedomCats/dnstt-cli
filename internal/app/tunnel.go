@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"unicode"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/FreedomCats/dnstt-cli/core/client"
 	"github.com/FreedomCats/dnstt-cli/core/dns"
 	"github.com/FreedomCats/dnstt-cli/internal/config"
@@ -108,6 +110,8 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 	}
 	user := prof.Exit.User
 	var password string
+	var signer ssh.Signer
+	var hostKey string
 	var checkExit func(context.Context, exit.OpenStream) error
 	switch exitType {
 	case "socks5":
@@ -143,7 +147,52 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 			return nil, errors.New("HTTP exit: invalid password")
 		}
 	case "ssh":
-		return nil, errors.New("SSH exit is not implemented yet (stage E5)")
+		// The profile's rules are checked again here: a profile built in code, as the
+		// tests and the menu do, has not been through internal/config.
+		if strings.TrimSpace(user) == "" {
+			return nil, errors.New("exit.user is required for exit.type \"ssh\"")
+		}
+		if strings.ContainsFunc(user, unicode.IsControl) {
+			return nil, errors.New("exit.user must not contain control characters")
+		}
+		hostKey, err = exit.ParseFingerprint(prof.Exit.HostKey)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case prof.Exit.PasswordRef != "" && prof.Exit.KeyRef != "":
+			return nil, errors.New("exit.type \"ssh\" takes exit.password_ref or exit.key_ref, not both")
+		case prof.Exit.PasswordRef == "" && prof.Exit.KeyRef == "":
+			return nil, errors.New("exit.type \"ssh\" needs exactly one of exit.password_ref and exit.key_ref")
+		}
+		if prof.Exit.PasswordRef != "" {
+			password, err = getSecret(prof.Exit.PasswordRef)
+			if err != nil {
+				// Store errors can contain references, paths or private payloads.
+				return nil, errors.New("exit.password_ref: cannot read the password from the secret store")
+			}
+			if password == "" {
+				return nil, errors.New("exit.password_ref: the stored password is empty")
+			}
+		} else {
+			key, err := getSecret(prof.Exit.KeyRef)
+			if err != nil {
+				// Store errors can contain references, paths or private payloads.
+				return nil, errors.New("exit.key_ref: cannot read the private key from the secret store")
+			}
+			if key == "" {
+				return nil, errors.New("exit.key_ref: the stored private key is empty")
+			}
+			signer, err = exit.ParseKey([]byte(key), "")
+			if err != nil {
+				return nil, fmt.Errorf("exit.key_ref: %w", err)
+			}
+		}
+		checkExit = func(ctx context.Context, open exit.OpenStream) error {
+			// The check opens its own stream and caches nothing, the same as SOCKS5. The
+			// signer is shared with the dialer: signing is stateless.
+			return (&exit.SSH{Open: open, User: user, Password: password, Signer: signer, HostKey: hostKey}).Check(ctx)
+		}
 	default:
 		return nil, fmt.Errorf("unknown exit type %q", exitType)
 	}
@@ -164,12 +213,18 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 		return nil, fmt.Errorf("supervisor: %w", err)
 	}
 	var exitDialer exit.Dialer
-	if exitType == "http" {
-		exitDialer = &httpExit{
+	switch exitType {
+	case "http":
+		exitDialer = &fatalExit{
 			dialer: &exit.HTTP{Open: tun.OpenStream, User: user, Password: password},
 			fatal:  tun.FatalExit,
 		}
-	} else {
+	case "ssh":
+		exitDialer = &fatalExit{
+			dialer: &exit.SSH{Open: tun.OpenStream, User: user, Password: password, Signer: signer, HostKey: hostKey},
+			fatal:  tun.FatalExit,
+		}
+	default:
 		// The profile's one_write reaches the datapath only: this dialer is its sole
 		// consumer, and the startup check above never sees it.
 		exitDialer = &exit.SOCKS5{Open: tun.OpenStream, User: user, Password: password, OneWrite: prof.Exit.OneWrite}
@@ -196,18 +251,19 @@ func sessionConfig(prof *config.Profile, domain dns.Name, pubkey []byte, opts Tu
 	}
 }
 
-// httpExit stops the tunnel on the first complete authentication refusal. Other HTTP
-// failures belong to their application request, not to the resolver's health.
-type httpExit struct {
+// fatalExit stops the tunnel on a failure that another attempt would meet again: a refused
+// login or a host key that is not the pinned one. Other exit failures belong to their
+// application connection, not to the resolver's health.
+type fatalExit struct {
 	dialer exit.Dialer
 	fatal  func(error)
 	once   sync.Once
 }
 
-func (h *httpExit) Dial(ctx context.Context, address string) (net.Conn, error) {
-	conn, err := h.dialer.Dial(ctx, address)
-	if exit.IsLogin(err) {
-		h.once.Do(func() { h.fatal(err) })
+func (f *fatalExit) Dial(ctx context.Context, address string) (net.Conn, error) {
+	conn, err := f.dialer.Dial(ctx, address)
+	if exit.IsLogin(err) || exit.IsHostKeyMismatch(err) {
+		f.once.Do(func() { f.fatal(err) })
 	}
 	return conn, err
 }
