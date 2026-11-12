@@ -316,6 +316,8 @@ func TestParseLinkRefusals(t *testing.T) {
 		{"a bad domain", linkFields(map[int]string{3: "bad_domain.example.com", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 3", "domain"}},
 		{"a bad key", linkFields(map[int]string{11: "not-a-key", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 11", "64 hex"}},
 		{"no resolver", linkFields(map[int]string{4: "", 37: "", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 4", "resolver"}},
+		{"an IPv6 literal without brackets", linkFields(map[int]string{4: "2001:db8::53", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 4"}},
+		{"a bracketed IPv6 literal", linkFields(map[int]string{4: "[2001:db8::53]:53", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 4"}},
 		{"a non-https DoH URL", linkFields(map[int]string{4: "", 21: "http://doh.example/dns-query", 22: "doh", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 21", "https"}},
 		{"a bad version", linkFields(map[int]string{0: "x", 12: "synthetic-user", 13: linkTestPassword}), []string{"field 0", "version"}},
 	} {

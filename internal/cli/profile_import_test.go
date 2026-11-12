@@ -481,6 +481,41 @@ func TestProfileImportInteractiveAsksName(t *testing.T) {
 	}
 }
 
+// The end of input at the name question cancels only when nothing was written: the link
+// imported earlier in the same run stays saved.
+func TestProfileImportInteractiveEOFAtNameAfterImport(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	store := newFakeSecretStore()
+	withFakeStore(t, store)
+
+	e, out, _ := importEnv()
+	p := &scriptedPrompter{t: t, answers: []scriptedAnswer{
+		{secret: true, value: importDnsttLink(nil)},
+		{secret: true, value: importDnsttLink(map[int]string{2: ""})},
+	}}
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := importInteractive(context.Background(), e, profiles, store, p); err != nil {
+		t.Fatalf("importInteractive = %v", err)
+	}
+	if !strings.Contains(strings.Join(p.asked, " "), "Profile name [home]: ") {
+		t.Fatalf("the name was not asked: %q", p.asked)
+	}
+	if strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("the command reports a cancel although a profile was imported:\n%s", out.String())
+	}
+
+	saved, err := config.LoadProfilesFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Profile["home"] == nil {
+		t.Fatal("the imported profile was not saved")
+	}
+}
+
 func TestProfileImportInteractiveTakenName(t *testing.T) {
 	path := isolatedConnectConfig(t)
 	store := newFakeSecretStore()
