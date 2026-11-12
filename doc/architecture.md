@@ -544,7 +544,8 @@ works without exporting the password.
 filters disappear with the process), `wintun.dll` next to the exe — from csqtt-cli §09a,
 with one app ID instead of two.
 
-**macOS.** `socks` only; builds in CI, not checked live.
+**macOS.** `socks` only; the code cross-compiles, but no CI job builds it, no archive is made
+and nothing is checked live.
 
 ---
 
