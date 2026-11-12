@@ -1,6 +1,7 @@
 ---
 kind: stage
-status: todo
+status: in-progress
+base: 86f4aa7
 depends: [01-p6-tcp-transport, 02-p7-payload-cap]
 ---
 

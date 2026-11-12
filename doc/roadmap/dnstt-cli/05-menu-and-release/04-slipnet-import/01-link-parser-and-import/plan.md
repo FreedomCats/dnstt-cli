@@ -1,6 +1,7 @@
 ---
 kind: task
-status: todo
+status: in-progress
+detailed: true
 ---
 
 # The parser and `profile import`
@@ -25,44 +26,184 @@ nothing — no profile, no key, no reference.
 The link carries the exit password in plain text. It is read by hidden input in a terminal or
 from stdin, never taken from an argument, and its values go to the secret store; `profile
 show` prints the reference, not the value. The command is the first caller; the menu's wizard
-(the menu stage) reuses the same function later.
+(the menu stage) reuses the parser later.
 
 Field 39 is copied into `payload_size` unchanged: `architecture.md` §10 calls it "payload size
 per query", which is the unit P7 defines, and the live link is where a generator's real value
 shows. Nothing is scaled or guessed.
 
 Out of scope: the menu's link question (menu stage), the SSH exit itself and its `host_key` /
-`key_ref` fields (`06-ssh-exit`), and any live value.
+`key_ref` fields (`06-ssh-exit`), any live value, and a change of the link format itself — if
+the implementation finds §10 wrong, that is reported, not edited here.
+
+## Steps
+
+1. **The shared name and domain rules** — new `internal/config/validate.go`,
+   `internal/cli/wizard.go`, `internal/cli/profile.go`:
+   - move `validProfileName` (`internal/cli/wizard.go:382-395`) and `validDomainName`
+     (`:397-427`) into `config` as `ValidProfileName(s string) bool` and
+     `ValidDomainName(s string) error`, unchanged: ASCII letters, digits and `-`, not starting
+     with `-`; the core's DNS limits and label characters for the domain; the errors never
+     repeat the value;
+   - update the callers: `wizard.go:44`, `:137`, `:157` and `profile.go:240` call the config
+     functions; the two local functions go away; no behaviour change;
+   - move `TestValidProfileName` and `TestValidDomainName` (`internal/cli/wizard_test.go:695-745`)
+     to `internal/config/validate_test.go` unchanged. The parser and the wizard must enforce one
+     set of rules, not two copies that drift.
+2. **One link** — `internal/config/links.go` (new): `Link` and `ParseLink`:
+   - `type Link struct { Name string; Profile *Profile; Password string }` — `Name` empty means
+     the field 2 name was absent or unusable and the caller has to ask; `Password` is the exit
+     password for the secret store and is never printed; `Profile.Exit.PasswordRef` stays empty
+     until the command has stored it;
+   - input handling: trim, match the scheme case-insensitively, remove ASCII whitespace inside
+     the payload (a terminal's soft wrap), refuse a second scheme in the same token (a link
+     pasted twice), then base64-decode: the standard alphabet with padding first, then without
+     padding, then the URL-safe alphabet; a decode error or a non-UTF-8 result is "the link is
+     damaged; copy it again in full", without the content;
+   - fields: split on `|`; field 0 the version as a decimal (missing or non-numeric is an
+     error); field 1 the type (`dnstt` → exit `socks5`, `dnstt_ssh` → `ssh`;
+     `sayedns`/`sayedns_ssh` refused naming NoizDNS; any other type refused by name); field 2
+     the name, kept only when `ValidProfileName` accepts it; field 3 the domain through
+     `ValidDomainName`; field 11 the key through `IsValidPubkey`; fields 12/13 the SOCKS5 login
+     and password; fields 15/16 the SSH login and password; field 23 the SSH auth kind, where
+     `key` is refused with the `06-ssh-exit` message; field 39 the payload size as a decimal
+     (absent or empty 0, negative refused); other fields ignored;
+   - a password without a login is refused for both types; a `dnstt_ssh` link needs a login
+     and a password, because key links are refused;
+   - resolvers: field 22 lowercased, absent `udp`, unknown `udp` (§10); `doh` takes field 21,
+     which must be an `https://` URL and is validated by `resolvers.Parse("doh:" + url)`;
+     `udp`, `tcp` and `dot` take field 4, or field 37 when 4 is empty, split on `,`, each entry
+     `host[:port[:flag]]` where the third part is Slipstream's flag and is ignored, the default
+     port 53, and `dot` maps 53 to 853; every entry is validated by `resolvers.Parse` and
+     stored as `r.String()` (normalized, port always written); at least one resolver unless the
+     transport is `doh`;
+   - the profile: `Domain`, `Pubkey`, `Resolvers`, `PayloadSize`, `Exit{Type, User}`, and
+     `KillSwitch` pointing at true, as the wizard writes it (`internal/cli/wizard.go:78-89`);
+     `Datapath` stays empty because a link carries no mode (`connect` then defaults to
+     `socks`), and `Socks` stays empty;
+   - every error names the field (`field 3`, `field 11`) and the rule; none repeats the link,
+     the password or the key. The type name may appear, it is not secret.
+3. **Several links** — `internal/config/links.go`: `ParseLinks(text string) ([]*Link, []error)`:
+   one link per non-empty line; a line without a scheme, a decode failure, a refusal or a bad
+   field become a warning that names the line number and the reason, never the content, while
+   the good lines are returned; order kept; no de-duplication (a second copy of a link meets
+   the taken-name rule instead).
+4. **The command** — `internal/cli/profile.go`:
+   - `import` in the `profile` description (`:17-33`) and in the usage list of `runProfile`
+     (`:45`), plus `case "import": return runProfileImport(ctx, e, subArgs)`; the subcommand
+     takes no arguments (an extra one is a usage error, a link in an argument is not accepted);
+   - a reader terminal check next to `isTerminal` (`internal/cli/connect.go:351-357`):
+     `isTerminalReader(r io.Reader) bool` for `*os.File` and `term.IsTerminal`;
+   - `runProfileImport`: load profiles, open the store through the existing `newSecretStore`
+     seam (`profile.go:169-172`), then the terminal path or the stdin path;
+   - terminal path: `newLinePrompter(e.stdin, e.stdout)`; ask the link by `AskSecret`; an empty
+     answer or EOF with nothing imported yet is `errCancelled` (the wizard's "cancelled,
+     nothing written"); a parse error or a refusal is printed and the question repeats; after
+     each profile ask "Another link (Enter to finish)" by hidden input; the name comes from
+     field 2 when it is usable and free, otherwise from `(&wizard{ask: p, out: e.stdout}).askName`
+     (`wizard.go:127-147`, which re-asks and defaults to `home`); a profile imported in this run
+     counts as taken for the next one;
+   - stdin path: `io.ReadAll`, `config.ParseLinks`, every warning to stderr, every link
+     imported; `ask` is nil there, so an absent or unusable name falls back to `home`, and a
+     taken name is a warning and that link is skipped; when nothing was imported, return
+     `no profile was imported` (the warnings are already printed), or `no slipnet:// link in
+     the input` when there was no link at all;
+   - one link: build the new `*config.Profiles` as a copy (`wizard.go:101-112`); if the exit
+     has a password, `store.Put(name+".password", password)` first and set
+     `Exit.PasswordRef`; make the first imported profile the default when there is none; save
+     with `saveProfiles` (`profile.go:169-172`); a failed save deletes the stored secret and
+     reports without its value (`wizard.go:113-122`); replace the in-memory set with the saved
+     one so the next link of the same run sees it;
+   - output: `Profile %q imported (exit %s).`; for a `dnstt_ssh` profile one more line that it
+     connects only after `06-ssh-exit`; the password, the link and the key never appear in the
+     output or in an error.
+5. **The parser tests** — `internal/config/links_test.go`:
+   - a synthetic builder in the test: `makeLink(version int, fields map[int]string) string` fills
+     a `|`-joined line with empty fields up to the highest index used and base64-encodes it;
+     every value is made up (`t.example.com`, `192.0.2.53`, a 64-hex key from a repeated
+     pattern), never a real link or server;
+   - decoding: standard alphabet with padding, without padding, URL-safe, whitespace inside,
+     CRLF; a double paste refused; damaged base64 refused; a non-UTF-8 payload refused;
+   - mapping: the two types; `udp` default, `tcp`, `dot` with 53 → 853, `doh` from field 21;
+     field 37 when 4 is empty; several resolvers; normalized entries with the port written;
+     `payload_size` absent, zero, a value, a negative; kill-switch true; datapath empty; the
+     password returned separately and no reference in the profile;
+   - refusals: `slipnet-enc://`; `sayedns`/`sayedns_ssh`; an unknown type; a key-based
+     `dnstt_ssh`; a password without a login; `dnstt_ssh` without a login or without a
+     password; a bad domain; a bad key; no resolver with `udp`; a non-https DoH URL; a bad
+     version; a missing type;
+   - `ParseLinks`: several lines, a bad line among good ones gives a warning with its line
+     number and the good links survive;
+   - one test asserts that a distinctive password and key value from a link never appear in
+     any error text.
+6. **The command tests** — new `internal/cli/profile_import_test.go`:
+   - isolate the config with `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` and `APPDATA` as the
+     other CLI tests do (`connect_test.go:377-380`); a fake `config.SecretStore` recording
+     `Put`/`Get`/`Delete`, assigned to `newSecretStore` and restored in `t.Cleanup`;
+   - stdin path: one `dnstt` link imports a profile; `config.LoadProfiles` shows the domain,
+     the key, the resolvers, `payload_size`, `exit.type`/`exit.user` and `password_ref`; the
+     file holds no password; the fake store got it under `<name>.password`; `runProfileShow`
+     prints the reference and no value; the profile becomes the default when it was the first;
+   - several links with a bad line: the good one imports, the warning is printed;
+   - a password `dnstt_ssh` link: `exit.type` is `ssh`, the reference is set, the output names
+     `06-ssh-exit`; a key-based one: nothing is written and the message names `06-ssh-exit`;
+   - a taken name with stdin: a warning, no overwrite; the same with the terminal path through
+     a fake prompter: the name question is asked;
+   - a failing `Put`: nothing is saved; a failing `saveProfiles`: the fake store saw `Delete`,
+     the error does not contain the value, and no profile is in the file;
+   - an empty input and an input without a link are errors and write nothing; an extra argument
+     is a usage error;
+   - the terminal path with a fake prompter: a link then an empty answer ends cleanly; a parse
+     error repeats the question; EOF on the first question returns `errCancelled`.
+7. **Help and checks** — the `profile` description and usage list in
+   `internal/cli/profile.go`; then `gofmt` outside `core/`, `go build ./...` and
+   `CGO_ENABLED=0 go build ./...`, the CI vet split on Linux and Windows,
+   `go test -race ./internal/config ./internal/cli`, the full `go test -race -count=1 ./...`
+   with `DNSTT_CLI_TEST_DBUS=1`, `DNSTT_CLI_TEST_NETNS=0` and the four external `netguard`
+   live tests excluded by `-skip` (no live call), the Windows cross-build with `go test -c`
+   of every package with tests, and `git diff --check`. No `doc/architecture.md` edit: §10
+   already describes the format; a mismatch is reported, not changed here. No README edit: the
+   release task rewrites it.
+
+Easy to get wrong:
+
+- the parser must not echo the link, the password or the key in an error; the link is the
+  secret, and a wrapped error from base64 can otherwise carry the payload;
+- a password in field 13 or 16 without a login is not "no authentication": it is refused,
+  because the profile validation cannot tell the two apart later;
+- `dot` with port 53 in the link means 853; the entry is normalized by `resolvers.Parse`, and
+  the stored string must parse back to the same resolver;
+- `doh` takes its URL from field 21, not from the hosts of field 4;
+- `payload_size` is copied, not scaled: the unit is P7's bytes of DNS payload;
+- the in-memory profiles set must be replaced after each saved link, or two links with the
+  same name in one run both "succeed" and the second silently overwrites the first;
+- a failed save after a successful `Put` must delete the secret, and the error must not name
+  the value.
 
 ## Done when
 
-- `slipnet://` decoding accepts the standard alphabet with padding, trims the input, drops
-  whitespace inside a wrapped line, accepts missing padding and falls back to the URL-safe
-  alphabet.
-- The fields map as §10 says: field 1 the type (`dnstt` → `socks5`, `dnstt_ssh` → `ssh`;
-  `sayedns`/`sayedns_ssh` and other unrelated types refused by name), field 2 the name (latin
-  letters, digits and `-`, otherwise asked), field 3 the domain, field 4 and 37 the resolvers
-  with field 22's transport (`udp` default, `tcp` from P6, `doh:` from field 21, `dot`, a
-  `dot` port 53 means 853), field 11 the key, fields 12 and 13 the SOCKS5 login and password,
-  fields 15 and 16 the SSH login and password, fields 23–25 the SSH auth type, key and
-  passphrase, field 39 `payload_size` from P7 (`0` is the domain's maximum). Other fields are
-  ignored.
-- Validation follows §10: a non-blank domain and name, exactly 64 hex digits for the key, at
-  least one resolver unless the transport is `doh`, a DoH URL starting with `https://`, and an
-  SSH login plus a password or a key for `dnstt_ssh`.
-- A password-based `dnstt_ssh` profile is created with `exit.type = "ssh"`, its login and a
-  password reference; the import prints that it connects only after `06-ssh-exit`, and
-  `connect` refuses it with that message. A key-based `dnstt_ssh` link is refused with a
-  message naming `06-ssh-exit`: no profile, no `key_ref` and no key material is written,
-  because that field does not exist before the stage.
-- `slipnet-enc://` is refused with a message naming the key built into the SlipNet app; a
-  `sayedns`/`sayedns_ssh` link is refused naming NoizDNS.
-- `profile import` reads hidden input in a terminal and lines from stdin otherwise; several
-  links import one by one and a bad line is a warning; a name already taken is re-asked like
-  the wizard does, never overwritten silently; the profile is saved only after the secret has
-  been stored, and a failed save removes the stored secret without printing it (the wizard's
-  pattern, `internal/cli/wizard.go:91-122`).
-- Tests build links inside the test from synthetic fields — no real value — and cover a
-  wrapped link, missing padding, the URL-safe alphabet, a bad line among good ones, every
-  refusal, the `dnstt_ssh` mapping including a key link's refusal, the store, and a
-  `profiles.toml` that holds a reference and no secret.
+- `ParseLink` decodes the standard alphabet with and without padding and the URL-safe one,
+  removes whitespace inside a soft-wrapped line, and refuses a damaged link or a double paste
+  without repeating its content.
+- The fields map as §10: type, name, domain, key, SOCKS5 login/password, SSH login/password,
+  auth kind, resolvers from 4 or 37 with the transport of 22, DoH from 21, `payload_size` from
+  39; `tcp:` and `payload_size` behave as P6 and P7 define them; the profile has the
+  kill-switch explicitly on, no datapath and no password reference.
+- `ParseLinks` splits several lines and turns each bad line into a warning with its line
+  number, keeping the good links.
+- `slipnet-enc://` is refused naming the key built into the SlipNet app; `sayedns`/`sayedns_ssh`
+  are refused naming NoizDNS; an unknown type, a key-based `dnstt_ssh`, a password without a
+  login, an SSH link without login or password, a bad domain or key, a missing resolver unless
+  DoH, a non-https DoH URL, a negative payload size and a bad version are refused with
+  messages naming the field and the rule.
+- `profile import` reads one link at a time by hidden input in a terminal, re-asks after a bad
+  paste and asks the name with the wizard's rule, and reads lines from stdin otherwise; a
+  password-based `dnstt_ssh` profile is created and the command says it connects only after
+  `06-ssh-exit`; a key-based link writes nothing; several links import one by one; a taken name
+  is asked in a terminal and skipped with a warning from stdin; end of input cancels without
+  writing.
+- The password goes to the secret store, `profiles.toml` holds only the reference, a failed
+  save removes the secret and reports without its value, and neither output nor an error ever
+  contains the password, the key or the link.
+- The tests of steps 5 and 6 pass, and the local matrix of step 7 is green; no new dependency,
+  no live run.
