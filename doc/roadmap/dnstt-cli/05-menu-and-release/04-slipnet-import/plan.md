@@ -41,8 +41,9 @@ are there.
   naming NoizDNS; other unrelated types are refused by name.
 - The fields `tcp` (transport) and the payload size (`payload_size`) are imported as P6 and P7
   define them.
-- A real link given by the user imports and, for `dnstt`, connects; no value of it is in a
-  tracked file.
+- A real link, if the user has one, imports and, for `dnstt`, connects; the user has none, so
+  `02-live-link` records `not seen — no real slipnet:// link` and the stage rests on the
+  synthetic parser tests; no value of a real link is in a tracked file.
 
 ## Children
 
@@ -50,11 +51,13 @@ are there.
    field mapping for both types, the command, the refusals, the secret store and synthetic
    tests. Task.
 2. [A real link](02-live-link/plan.md) — the user's link imported and used once (connected for
-   `dnstt`); values in chat, evidence ignored. Task; user-run.
+   `dnstt`) if one exists; the user has none, so the node is `not seen — no real slipnet://
+   link`. Task; user-run.
 
 The parser and the command come first, proven on links built inside the tests. The live link
 is the user's and carries an exit password, so it is a separate result: it proves the real
-generator's shape, which synthetic links cannot.
+generator's shape, which synthetic links cannot. There is no such link here, so that result
+is `not seen` and the synthetic tests stand alone.
 
 Decision recorded: password-based `dnstt_ssh` profiles are created and are not connectable
 until `06-ssh-exit`; key-based links are refused until then, because `exit.key_ref` is that
