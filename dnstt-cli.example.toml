@@ -14,7 +14,7 @@ resolvers    = [                            # Resolvers to tunnel through (empty
   "network",                                #   The network's DNS (ISP's resolver) at each dial
 ]
 bootstrap    = []                           # Bootstrap DNS servers by address for resolver names; empty — network's DNS
-utls         = ""                           # uTLS distribution; empty — upstream default
+utls         = ""                           # uTLS distribution; empty — the DefaultUTLS distribution (P5)
 datapath     = "tun"                        # "tun" (system-wide VPN) or "socks" (local proxy)
 kill_switch  = true                         # (tun only) Block traffic while tunnel is down
 tun_dns      = "1.1.1.1"                    # DNS behind the server for tun mode

@@ -104,8 +104,10 @@ Facts from the code at `base`, which the children take into account:
   available and is recorded as `not seen`, not counted as a pass.
 - The measured keepalive and handshake timeouts are set in the code.
 - The `danted` question is answered and, if it pays off, the exit setting exists.
-- The `network` resolver works in `connect` and `resolvers check` on Linux and Windows;
-  unpinned resolver host names use the R5 bootstrap-server selection.
+- The `network` resolver works in `connect` and `resolvers check` on Linux, covered by unit
+  and injected-DNS tests; the Windows path is cross-built and test-compiled only and is
+  `not seen`; no live `network` run was made. Unpinned resolver host names use the R5
+  bootstrap-server selection.
 - The results are recorded in this stage and in `architecture.md` without the environment,
   addresses or resolvers; the course of the runs stays in `doc/local/` (`AGENTS.md`).
 
@@ -152,9 +154,10 @@ used the local literal UDP resolver only; DoH and DoT were exercised through the
 so the SOCKS5 exit over DoH and DoT is not claimed. The `network` resolver is covered by
 unit and injected-DNS tests; its Windows path was cross-built and test-compiled only, and no
 live `network` run was made (the live profiles used pins or a literal UDP entry). A system
-DNS on a loopback stub is not used by the reader, a recorded limitation; allowing it is a
-separate change. The HTTP result does not replace the SOCKS5 acceptance, and the synthetic
-SOCKS5 result does not stand for the user's server, exit or network.
+DNS on a loopback stub that is not the systemd-resolved stub is not used by the reader, a
+recorded limitation; allowing it is a separate change. The HTTP result does not replace the
+SOCKS5 acceptance, and the synthetic SOCKS5 result does not stand for the user's server,
+exit or network.
 
 The final timeouts are keepalive 30 s, handshake 10 s and `degraded` 25 s. The `danted`
 question is answered by the measured one-write exchange and the `exit.one_write` setting,

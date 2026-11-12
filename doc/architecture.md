@@ -145,9 +145,11 @@ moves to the next one; for `network`, each of the network's servers in turn.
 
 A host name in a resolver is resolved without the system: a `@address` suffix pins the
 address (`doh:https://doh.example/dns-query@192.0.2.1`, like `curl --resolve`; several
-addresses go comma-separated and are tried in turn; an `@` inside the URL itself is
-written `%40`), and without it the name is resolved through a bootstrap resolver over
-bound sockets. Built-in presets carry addresses, so they work under a closed kill-switch.
+addresses go comma-separated, and the DoH and DoT dialers try them in turn; a `udp:` entry
+uses the first, having no connection to move to another address; an `@` inside the URL
+itself is written `%40`), and without it the name is resolved through a bootstrap resolver
+over bound sockets. Built-in presets carry addresses, so they work under a closed
+kill-switch.
 A resolver given by address — `udp:192.0.2.53`, `doh:https://192.0.2.1/dns-query`, or a
 name with a pin — never needs the bootstrap resolver. It asks plain DNS of the profile's own
 `bootstrap` servers, and only them, if the profile has any; otherwise of the DNS servers
@@ -564,7 +566,7 @@ resolvers    = [                               # empty in the wizard — ["netwo
 ]
 bootstrap    = []                               # plain DNS by address for resolver names;
                                                 # empty — the network's DNS (the ISP's)
-utls         = ""                               # empty — upstream default distribution
+utls         = ""                               # empty — the DefaultUTLS distribution (P5)
 datapath     = "tun"                            # tun | socks
 kill_switch  = true                             # tun: traffic closed while the tunnel is down
 tun_dns      = "1.1.1.1"                        # DNS behind the server for tun (R7)
