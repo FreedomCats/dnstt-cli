@@ -88,6 +88,13 @@ type Options struct {
 	// OnTransition receives every change of state. nil — silent. It and Logf are called
 	// from one goroutine at a time.
 	OnTransition func(Transition)
+	// OnRoundFailed receives a full round of failed handshakes after the tunnel has been
+	// up at least once: every resolver of the list, and every server of the network entry,
+	// failed since the last session. It is called from Run's goroutine, once per round and
+	// before the backoff delay, like OnTransition, and must not block. failures is a copy
+	// the receiver owns. nil — silent. The first round of a connect does not report here:
+	// it ends Run with NeverConnectedError.
+	OnRoundFailed func(failures []ResolverFailure)
 	// Logf receives the lines of the supervisor: why an attempt failed, that the network
 	// changed. nil — silent.
 	Logf func(format string, args ...any)
@@ -487,8 +494,12 @@ func (t *Tunnel) Run(ctx context.Context) (err error) {
 			if !heard {
 				return &NeverConnectedError{Failures: round}
 			}
+			failures := append([]ResolverFailure(nil), round...)
 			round = nil
 			cause := fmt.Errorf("no resolver of %d completed a handshake", pool.Len())
+			if t.opts.OnRoundFailed != nil {
+				t.opts.OnRoundFailed(failures)
+			}
 			if t.pause(ctx, name, cause, t.backoff.next()) {
 				prev = -1
 			}

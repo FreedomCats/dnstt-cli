@@ -33,6 +33,9 @@ type TunnelOptions struct {
 	Logf func(format string, args ...any)
 	// OnTransition receives every state change of the supervisor; nil — silent.
 	OnTransition func(supervisor.Transition)
+	// OnRoundFailed receives a full round of failed handshakes after a session has been
+	// up; nil — silent. See supervisor.Options.
+	OnRoundFailed func([]supervisor.ResolverFailure)
 	// Notice receives the user-facing lines about system traffic between sessions; nil —
 	// Logf.
 	Notice func(format string, args ...any)
@@ -147,14 +150,15 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 
 	// Build the supervisor.
 	tun, err := supervisor.New(supervisor.Options{
-		Session:      sessionCfg,
-		Resolvers:    pool,
-		Bootstrap:    bootstrap,
-		NetworkDNS:   networkDNS,
-		CheckExit:    checkExit,
-		OnTransition: opts.OnTransition,
-		Notice:       opts.Notice,
-		Logf:         opts.Logf,
+		Session:       sessionCfg,
+		Resolvers:     pool,
+		Bootstrap:     bootstrap,
+		NetworkDNS:    networkDNS,
+		CheckExit:     checkExit,
+		OnTransition:  opts.OnTransition,
+		OnRoundFailed: opts.OnRoundFailed,
+		Notice:        opts.Notice,
+		Logf:          opts.Logf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("supervisor: %w", err)

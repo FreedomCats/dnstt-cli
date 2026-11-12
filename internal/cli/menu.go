@@ -315,7 +315,9 @@ func reportItemError(e *env, err error) {
 
 // connectItem shows the current profile's resolvers and offers to change them first, then
 // connects: the offer runs before the body because the body loads the profile from the
-// file, so an edited list is used by this connect exactly because it was saved first.
+// file, so an edited list is used by this connect exactly because it was saved first. A
+// full round of failed handshakes after the session is up offers the same check and edit
+// again, and the connection is stopped before the question.
 func (m *menu) connectItem(ctx context.Context, e *env, abort <-chan struct{}) error {
 	profiles, err := config.LoadProfiles()
 	if err != nil {
@@ -326,7 +328,7 @@ func (m *menu) connectItem(ctx context.Context, e *env, abort <-chan struct{}) e
 	if err != nil || !connect {
 		return err
 	}
-	return m.connect(ctx, e, connectRequest{profileName: name}, abort)
+	return m.connectWithResolvers(ctx, e, name, abort)
 }
 
 // anotherProfileItem lists the profiles and makes the chosen one the default. An empty

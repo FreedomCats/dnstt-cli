@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
 
 // menuProfile is a synthetic profile: the documentation domain, the shared key, a
@@ -105,6 +106,17 @@ type menuHarness struct {
 	// checkOutcomes is what the check body returns for a successful run.
 	checkOutcomes []resolverOutcome
 
+	// roundEvents is one entry per connection that reports a round: the fake calls the
+	// request's callback with it and then waits for the connection to be stopped. With
+	// blockConnections the connection only waits, so a test can stop it by signal.
+	roundEvents      [][]supervisor.ResolverFailure
+	blockConnections bool
+
+	// mu guards finished, which a connection that reported a round sets before it
+	// returns: a prompt can then check that the connection was stopped first.
+	mu       sync.Mutex
+	finished bool
+
 	connectErr error
 	checkErr   error
 	saveErr    error
@@ -125,8 +137,27 @@ func newMenuHarness(t *testing.T, answers []scriptedAnswer) *menuHarness {
 	h.menu = newMenu()
 	h.menu.ask = h.prompter
 	h.menu.store = func() (config.SecretStore, error) { return h.store, nil }
-	h.menu.connect = func(_ context.Context, _ *env, req connectRequest, _ <-chan struct{}) error {
+	h.menu.connect = func(ctx context.Context, _ *env, req connectRequest, _ <-chan struct{}) error {
 		h.connected = append(h.connected, req)
+		if h.blockConnections {
+			<-ctx.Done()
+			return nil
+		}
+		if len(h.roundEvents) > 0 {
+			entry := h.roundEvents[0]
+			h.roundEvents = h.roundEvents[1:]
+			if req.onRoundFailed != nil {
+				// A round can report twice: the second send is dropped by the
+				// non-blocking callback, and the first event cancels the connection.
+				req.onRoundFailed(entry)
+				req.onRoundFailed(entry)
+				<-ctx.Done()
+				h.mu.Lock()
+				h.finished = true
+				h.mu.Unlock()
+				return nil
+			}
+		}
 		return h.connectErr
 	}
 	h.menu.check = func(_ context.Context, _ *env, name string) ([]resolverOutcome, error) {
@@ -282,8 +313,12 @@ func TestMenuConnectFlagRunsOneConnection(t *testing.T) {
 	if len(h.connected) != 1 {
 		t.Fatalf("connections = %d, want 1", len(h.connected))
 	}
-	if want := (connectRequest{profileName: "home"}); h.connected[0] != want {
-		t.Fatalf("request %+v, want %+v", h.connected[0], want)
+	// The request carries a callback, so it is not comparable: the fields are compared.
+	// menu -connect leaves the round callback nil.
+	got := h.connected[0]
+	if got.profileName != "home" || got.datapath != "" || got.verbose || got.noKillSwitch ||
+		got.allowLeak || got.onRoundFailed != nil {
+		t.Fatalf("request %+v, want the profile only", got)
 	}
 	if h.listed != 0 || len(h.removed) != 0 || len(h.checked) != 0 || len(h.saved) != 0 {
 		t.Fatal("the loop ran although -connect was given")

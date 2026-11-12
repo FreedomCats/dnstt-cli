@@ -107,6 +107,10 @@ type connectRequest struct {
 	verbose      bool
 	noKillSwitch bool
 	allowLeak    bool
+
+	// onRoundFailed receives a full round of failed handshakes after the tunnel has been
+	// up; nil — silent. The menu installs it to offer the resolvers; connect leaves it nil.
+	onRoundFailed func([]supervisor.ResolverFailure)
 }
 
 // runConnection connects once: it loads the profile, builds the tunnel and the datapath,
@@ -172,12 +176,13 @@ func runConnection(ctx context.Context, e *env, req connectRequest, abort <-chan
 	// the supervisor by not consuming them.
 	transitions, onTransition := statusTransitions(e.stdout)
 	tunnel, err := app.BuildTunnel(app.TunnelOptions{
-		Profile:      &p,
-		ProfileName:  profileName,
-		Logf:         logf,
-		Notice:       notice,
-		Control:      control,
-		OnTransition: onTransition,
+		Profile:       &p,
+		ProfileName:   profileName,
+		Logf:          logf,
+		Notice:        notice,
+		Control:       control,
+		OnTransition:  onTransition,
+		OnRoundFailed: req.onRoundFailed,
 	})
 	if err != nil {
 		return err
