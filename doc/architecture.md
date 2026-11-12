@@ -639,6 +639,13 @@ A link carries the exit password in plain text: it is asked by hidden input or r
 stdin, never taken as an argument, and its values go straight to the secret store, as with
 links in csqtt-cli.
 
+For `dnstt_ssh` the parser reads the login from field 15 and the credential from field 16 (a
+password) or from fields 23–25 (a key and its passphrase). A passphrase only decrypts the key:
+the key is stored in PEM without one, as everywhere else, and the passphrase is dropped. A link
+carries no host key, so the fingerprint is asked at import: an interactive import asks for it
+with `exit.ParseFingerprint`, and a stdin import refuses that line with a warning naming
+`exit.host_key` and imports the other lines.
+
 ---
 
 ## 10a. Interactive mode and output
@@ -651,18 +658,23 @@ From csqtt-cli: the menu has no logic of its own, it calls the same code as the 
   prints the command list.
 - **No profile yet** — the wizard: paste a `slipnet://` link (hidden input: it holds the
   exit password) or answer questions — profile name (Enter — `home`), tunnel domain, server
-  key, exit type, exit login and password (hidden, twice), resolvers — the servers to
-  connect through, one or several, entered by the user (Enter without any — `network`, the
-  network's DNS; presets by name for those who want them), then the mode: all traffic
-  (`tun`, Enter, where supported) or only programs with the proxy (`socks`). End of input
-  on any question cancels without writing.
+  key, exit type (`socks5`, `http` or `ssh`), exit login and, for `socks5` and `http`, the
+  password (hidden, twice), and for `ssh` the authentication method: the password (hidden,
+  twice), or the path of a private key, whose passphrase is asked (hidden) when the key needs
+  one; then the pinned fingerprint (`SHA256:…`, a public value, asked plainly, not hidden),
+  resolvers — the servers to connect through, one or several, entered by the user (Enter
+  without any — `network`, the network's DNS; presets by name for those who want them), then
+  the mode: all traffic (`tun`, Enter, where supported) or only programs with the proxy
+  (`socks`). End of input on any question cancels without writing.
 - **Privileges.** `tun` without root: the menu re-runs one connection through `sudo` in the
   same terminal on Linux, through UAC in a new window on Windows. No way to get them (no
   `sudo`, a non-admin Windows account) — `socks` for this time.
 - **Connect** shows the resolvers saved in the profile and offers to connect with them
   (Enter) or to change them first; the changed list is saved to the profile.
 - **Menu items.** Connect; check resolvers (drops dead ones on request); edit resolvers;
-  new exit password; change domain or key; another profile; delete profile; `0` — exit.
+  new exit password or key (the password of a password exit, the key and its passphrase of a
+  key exit); change pinned fingerprint (with the current `exit.host_key` as the default
+  answer); change domain or key; another profile; delete profile; `0` — exit.
 - **When resolvers run out mid-session** (none completes a handshake for a full round),
   the menu offers to check and edit them and connects again.
 - **Signals.** Ctrl+C while connected returns to the menu, the second one does not wait for
