@@ -615,7 +615,7 @@ are base64 of a UTF-8 string (marked b64 below).
 
 | # | Field | Use in dnstt-cli |
 |---|---|---|
-| 1 | type: `dnstt`, `dnstt_ssh`; also `sayedns`, `sayedns_ssh` (NoizDNS), Slipstream, VayDNS, NaiveProxy, VLESS and others | `dnstt` → exit `socks5`, `dnstt_ssh` → exit `ssh`; anything else is refused |
+| 1 | type: `dnstt`, `dnstt_ssh`; also `sayedns`, `sayedns_ssh` (NoizDNS), Slipstream, VayDNS, NaiveProxy, VLESS and others | `dnstt` → exit `socks5`, `dnstt_ssh` → exit `ssh` (the link carries no host key, so the import asks for its fingerprint); anything else is refused |
 | 2 | profile name | profile name (latin letters, digits and `-`; otherwise asked) |
 | 3 | tunnel domain | `domain` |
 | 4 | resolvers: `host:port:flag`, comma-separated; the flag is for Slipstream | `resolvers`, with the transport of field 22 |
