@@ -640,8 +640,8 @@ From csqtt-cli: the menu has no logic of its own, it calls the same code as the 
 
 - **Start.** `dnstt-cli` without arguments in a terminal opens the menu (on Windows — a
   double click on the exe); `menu` opens it explicitly; `menu -connect <profile>` connects
-  at once with the same questions. Without a terminal, no arguments prints the command
-  list.
+  at once, without the connect item's resolver question. Without a terminal, no arguments
+  prints the command list.
 - **No profile yet** — the wizard: paste a `slipnet://` link (hidden input: it holds the
   exit password) or answer questions — profile name (Enter — `home`), tunnel domain, server
   key, exit type, exit login and password (hidden, twice), resolvers — the servers to
