@@ -18,8 +18,8 @@ import (
 // "cancelled, nothing written" and exits 1.
 var errCancelled = errors.New("cancelled, nothing written")
 
-// wizard asks the questions of architecture.md §10a and saves the profile. The menu (E4)
-// builds one with its own prompter and calls add; `profile add` is the CLI caller.
+// wizard asks the questions of architecture.md §10a and saves the profile. The menu and
+// `profile add` build one with newWizard and call add.
 type wizard struct {
 	ask   prompter
 	out   io.Writer

@@ -12,7 +12,7 @@ import (
 )
 
 // prompter asks the person the questions of the wizard. It is an interface for the sake of
-// tests and of the menu (E4), which will pass its own implementation.
+// tests and of the menu, which plays the person with its own implementation.
 type prompter interface {
 	// Ask prints the question and returns the answer line.
 	Ask(ctx context.Context, question string) (string, error)
@@ -20,8 +20,8 @@ type prompter interface {
 	AskSecret(ctx context.Context, question string) (string, error)
 }
 
-// linePrompter asks on a line reader and writes the questions to out. It owns the one
-// reader of the process: the wizard is its only caller until the menu passes its own.
+// linePrompter asks on a line reader and writes the questions to out. It holds the one
+// reader of the process: the menu, the wizard and the link question share it.
 type linePrompter struct {
 	in  io.Reader
 	out io.Writer
@@ -34,7 +34,7 @@ func newLinePrompter(in io.Reader, out io.Writer) *linePrompter {
 }
 
 // Ask writes the question and returns the next line. The caller includes the default in
-// the question: the wizard decides what an empty answer means.
+// the question and decides what an empty answer means.
 func (p *linePrompter) Ask(ctx context.Context, question string) (string, error) {
 	if _, err := fmt.Fprint(p.out, question); err != nil {
 		return "", err

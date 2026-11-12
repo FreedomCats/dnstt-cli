@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
@@ -263,23 +264,7 @@ func runProfileAdd(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 
-	// tun is offered when the datapath reports it works on this system; the reason is
-	// shown when the answer is tun anyway.
-	modes := []string{"tun", "socks"}
-	var tunUnsupported error
-	if requires := (&datapath.Tun{}).Requires(); requires.Unsupported != nil {
-		modes = []string{"socks"}
-		tunUnsupported = requires.Unsupported
-	}
-
-	w := &wizard{
-		ask:            newLinePrompter(e.stdin, e.stdout),
-		out:            e.stdout,
-		store:          store,
-		modes:          modes,
-		tunUnsupported: tunUnsupported,
-		save:           config.SaveProfiles,
-	}
+	w := newWizard(e.stdout, newLinePrompter(e.stdin, e.stdout), store)
 	name, prof, err := w.add(ctx, profiles, name)
 	if err != nil {
 		return err
@@ -287,6 +272,26 @@ func runProfileAdd(ctx context.Context, e *env, args []string) error {
 
 	fmt.Fprintf(e.stdout, "Profile %q added (exit %s, mode %s).\n", name, prof.Exit.Type, prof.Datapath)
 	return nil
+}
+
+// newWizard builds the wizard the menu and `profile add` share: tun is offered when the
+// datapath reports it works on this system, and its reason is shown when the answer is tun
+// anyway.
+func newWizard(out io.Writer, ask prompter, store config.SecretStore) *wizard {
+	modes := []string{"tun", "socks"}
+	var tunUnsupported error
+	if requires := (&datapath.Tun{}).Requires(); requires.Unsupported != nil {
+		modes = []string{"socks"}
+		tunUnsupported = requires.Unsupported
+	}
+	return &wizard{
+		ask:            ask,
+		out:            out,
+		store:          store,
+		modes:          modes,
+		tunUnsupported: tunUnsupported,
+		save:           saveProfiles,
+	}
 }
 
 func runProfileSet(_ context.Context, e *env, args []string) error {

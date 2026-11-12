@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -58,5 +59,32 @@ func TestHelpForCommand(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "Usage: dnstt-cli version\n") {
 		t.Errorf("help output:\n%s", out)
+	}
+}
+
+// The menu is a command of its own right after connect: the list keeps its layout and gains
+// one line, and help for it works through the same lookup.
+func TestMenuInTheCommandList(t *testing.T) {
+	names := make([]string, 0, len(commands()))
+	for _, cmd := range commands() {
+		names = append(names, cmd.name)
+	}
+	i := slices.Index(names, "menu")
+	if i < 0 {
+		t.Fatalf("the command list has no menu: %v", names)
+	}
+	if want := slices.Index(names, "connect") + 1; i != want {
+		t.Fatalf("menu is at %d, want right after connect (%d): %v", i, want, names)
+	}
+
+	code, out, _ := runCLI(t, "help", "menu")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d", code, exitOK)
+	}
+	if !strings.HasPrefix(out, "Usage: dnstt-cli menu [-connect profile]\n") {
+		t.Fatalf("help output:\n%s", out)
+	}
+	if !strings.Contains(out, "connect to the profile at once") {
+		t.Fatalf("help does not describe -connect:\n%s", out)
 	}
 }

@@ -43,24 +43,43 @@ func importInteractive(ctx context.Context, e *env, profiles *config.Profiles, s
 		if imported > 0 {
 			question = "Another link (Enter to finish): "
 		}
-		answer, err := p.AskSecret(ctx, question)
+		ok, err := importOne(ctx, e, p, profiles, store, question)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			if errors.Is(err, io.EOF) {
-				if imported == 0 {
-					return errCancelled
-				}
+			// The end of input cancels only when nothing was written: earlier links of
+			// this run stay imported.
+			if imported > 0 && errors.Is(err, errCancelled) {
 				return nil
 			}
 			return err
 		}
-		if strings.TrimSpace(answer) == "" {
+		if !ok {
 			if imported == 0 {
 				return errCancelled
 			}
 			return nil
+		}
+		imported++
+	}
+}
+
+// importOne asks one link and imports it. A bad paste is reported and the question repeats;
+// the name is asked when the link has none or it is taken. An empty answer returns false
+// and writes nothing; the end of input is errCancelled, or ctx.Err() when the context was
+// cancelled.
+func importOne(ctx context.Context, e *env, p prompter, profiles *config.Profiles, store config.SecretStore, question string) (imported bool, err error) {
+	for {
+		answer, err := p.AskSecret(ctx, question)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
+			if errors.Is(err, io.EOF) {
+				return false, errCancelled
+			}
+			return false, err
+		}
+		if strings.TrimSpace(answer) == "" {
+			return false, nil
 		}
 
 		link, err := config.ParseLink(answer)
@@ -72,20 +91,15 @@ func importInteractive(ctx context.Context, e *env, profiles *config.Profiles, s
 		name := link.Name
 		if name == "" || profiles.Profile[name] != nil {
 			if name, err = (&wizard{ask: p, out: e.stdout}).askName(ctx, profiles); err != nil {
-				// The end of input cancels only when nothing was written: earlier links
-				// of this run stay imported.
-				if imported > 0 && errors.Is(err, errCancelled) {
-					return nil
-				}
-				return err
+				return false, err
 			}
 		}
 		prof, err := importLink(link, name, profiles, store)
 		if err != nil {
-			return err
+			return false, err
 		}
 		reportImportedProfile(e, name, prof)
-		imported++
+		return true, nil
 	}
 }
 

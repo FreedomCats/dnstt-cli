@@ -70,6 +70,7 @@ type command struct {
 func commands() []*command {
 	return []*command{
 		connectCommand(),
+		menuCommand(),
 		profileCommand(),
 		resolversCommand(),
 		versionCommand(),
@@ -110,11 +111,21 @@ func mainWith(args []string, build Build, in io.Reader, out, errW io.Writer) int
 	return run(context.Background(), e, args)
 }
 
+// Indirections for the tests: a *os.File terminal cannot be faked, so the decision of what
+// no arguments mean reads these two instead. Everything else tests the real streams.
+var (
+	stdinIsTerminal  = isTerminalReader
+	stdoutIsTerminal = isTerminal
+)
+
 // run is split from Main for the sake of tests: they need their own streams and context.
 func run(ctx context.Context, e *env, args []string) int {
 	if len(args) == 0 {
-		// A question "what can you do", not an error: the command list goes to stdout and
-		// the exit code is zero.
+		// In a terminal the menu opens; without one the command list answers the question
+		// "what can you do" — not an error, so it goes to stdout and the exit code is zero.
+		if stdinIsTerminal(e.stdin) && stdoutIsTerminal(e.stdout) {
+			return report(e, menuCommand(), runMenu(ctx, e, nil))
+		}
 		printUsage(e.stdout)
 		return exitOK
 	}

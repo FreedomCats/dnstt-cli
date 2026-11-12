@@ -57,6 +57,65 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		return usagef("extra argument: connect takes at most one profile name")
 	}
 
+	// Set up signal handling: first Ctrl+C stops cleanly, second does not wait.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	abortCh := make(chan struct{})
+	go func() {
+		count := 0
+		for {
+			sig := <-sigCh
+			count++
+			if count == 1 {
+				writeStopNotice(e.stderr)
+				cancel()
+			} else if count == 2 {
+				fmt.Fprintf(e.stderr, "%s: not waiting for open connections\n", app.Name)
+				close(abortCh)
+			} else {
+				fmt.Fprintf(e.stderr, "%s: received %v, exiting\n", app.Name, sig)
+				os.Exit(1)
+			}
+		}
+	}()
+
+	return runConnection(ctx, e, connectRequest{
+		profileName:  profileName,
+		datapath:     *datapathFlag,
+		verbose:      *verbose,
+		noKillSwitch: *noKillSwitch,
+		allowLeak:    *allowLeak,
+	}, abortCh)
+}
+
+// writeStopNotice is the one wording of the line the first stop prints: connect's ladder
+// and the menu's session share it.
+func writeStopNotice(w io.Writer) {
+	fmt.Fprintf(w, "\n%s: stopping...\n", app.Name)
+}
+
+// connectRequest is what one connection needs: the profile and the flags of `connect`. The
+// menu supplies the profile alone.
+type connectRequest struct {
+	profileName  string
+	datapath     string
+	verbose      bool
+	noKillSwitch bool
+	allowLeak    bool
+}
+
+// runConnection connects once: it loads the profile, builds the tunnel and the datapath,
+// and runs until stopped. abort is the caller's force-abort channel: closing it stops the
+// wait for open connections instead of draining them.
+//
+// The caller owns ctx and is what stops the run: this function installs no signal handling,
+// because the menu has a ladder of its own and two of them would race.
+func runConnection(ctx context.Context, e *env, req connectRequest, abort <-chan struct{}) error {
 	// Load profiles.
 	profiles, err := config.LoadProfiles()
 	if err != nil {
@@ -64,6 +123,7 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	}
 
 	// Find the profile to use.
+	profileName := req.profileName
 	if profileName == "" {
 		profileName = profiles.DefaultProfile
 		if profileName == "" {
@@ -77,8 +137,8 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 
 	// The datapath of the run: the flag, then the profile, then socks.
 	kind := prof.Datapath
-	if *datapathFlag != "" {
-		kind = *datapathFlag
+	if req.datapath != "" {
+		kind = req.datapath
 	}
 	if kind == "" {
 		kind = "socks"
@@ -87,7 +147,7 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	p.Datapath = kind
 
 	logf := func(format string, args ...any) {
-		if *verbose {
+		if req.verbose {
 			fmt.Fprintf(e.stderr, format+"\n", args...)
 		}
 	}
@@ -194,10 +254,10 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	// needs the session before Run, and a refusal is a clear error, not a loop of
 	// reconnections. The mark is set only here: SO_MARK needs the table's CAP_NET_ADMIN.
 	if requires.DNSGuard {
-		on, off := killSwitchPolicy(&p, *noKillSwitch)
+		on, off := killSwitchPolicy(&p, req.noKillSwitch)
 		prot, err = app.EnableProtection(app.ProtectionOptions{
 			KillSwitch: on,
-			AllowLeak:  *allowLeak,
+			AllowLeak:  req.allowLeak,
 			Notice:     notice,
 		})
 		if err != nil {
@@ -220,33 +280,6 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		tunnel.Supervisor.SetKillSwitch(prot.Locked)
 	}
 
-	// Set up signal handling: first Ctrl+C stops cleanly, second does not wait.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	abortCh := make(chan struct{})
-	go func() {
-		count := 0
-		for {
-			sig := <-sigCh
-			count++
-			if count == 1 {
-				fmt.Fprintf(e.stderr, "\n%s: stopping...\n", app.Name)
-				cancel()
-			} else if count == 2 {
-				fmt.Fprintf(e.stderr, "%s: not waiting for open connections\n", app.Name)
-				close(abortCh)
-			} else {
-				fmt.Fprintf(e.stderr, "%s: received %v, exiting\n", app.Name, sig)
-				os.Exit(1)
-			}
-		}
-	}()
-
 	// Start the status line if output is a terminal.
 	var status *statusLine
 	if transitions != nil {
@@ -263,17 +296,15 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 	// Wait for an error or cancellation.
 	select {
 	case err := <-errCh:
-		cancel()
-		return finishConnect(err, prof.Exit.Type, dp, abortCh)
+		return finishConnect(err, prof.Exit.Type, dp, abort)
 	case <-ctx.Done():
 		// Clean shutdown requested.
-		cancel()
-		// Wait for the supervisor to finish, but abort on second Ctrl+C.
+		// Wait for the supervisor to finish, but abort on the second stop.
 		select {
 		case err := <-errCh:
-			return finishConnect(err, prof.Exit.Type, dp, abortCh)
-		case <-abortCh:
-			// Second Ctrl+C: force immediate exit.
+			return finishConnect(err, prof.Exit.Type, dp, abort)
+		case <-abort:
+			// The second stop does not wait for open connections.
 			dp.Close()
 			return <-errCh
 		}
