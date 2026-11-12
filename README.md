@@ -11,11 +11,13 @@ whatever its owner runs behind it (a SOCKS5 proxy with a login is the main case)
 ## What it does
 
 `dnstt-cli` without arguments in a terminal opens the menu: connect; check the resolvers
-and drop the dead ones; edit them; a new exit password; change the domain or the key;
-another profile; delete a profile. With no profile yet the wizard runs: paste a
-`slipnet://` link, or answer the questions — name, tunnel domain, server key, exit login
-and password, resolvers, and the mode: all traffic (`tun`) or only the programs with a
-proxy (`socks`).
+and drop the dead ones; edit them; a new exit password or key; change the pinned
+fingerprint; change the domain or the key; another profile; delete a profile. With no
+profile yet the wizard runs: paste a `slipnet://` link, or answer the questions — name,
+tunnel domain, server key, exit type (`socks5`, `http` or `ssh`), the exit login and its
+password or, for `ssh`, the authentication method with the password or the path of a
+private key and its passphrase, the pinned fingerprint of the SSH server, resolvers, and
+the mode: all traffic (`tun`) or only the programs with a proxy (`socks`).
 
 The same actions are commands:
 
@@ -34,10 +36,10 @@ tunnel and needs root on Linux. `menu -connect <profile>` makes one connection a
 returns, without showing the menu.
 
 Profiles live in `profiles.toml`, in `~/.config/dnstt-cli/` on Linux and
-`%APPDATA%\dnstt-cli\` on Windows. The exit password does not live there: it goes to the
-system secret store (the keyring on Linux, DPAPI on Windows), and the profile keeps only a
-reference to it. [`dnstt-cli.example.toml`](dnstt-cli.example.toml) is the same file with
-every field described.
+`%APPDATA%\dnstt-cli\` on Windows. The exit password and an SSH private key do not live
+there: they go to the system secret store (the keyring on Linux, DPAPI on Windows), and the
+profile keeps only a reference to them. [`dnstt-cli.example.toml`](dnstt-cli.example.toml)
+is the same file with every field described.
 
 ## What leaks and what does not
 
