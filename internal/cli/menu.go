@@ -42,11 +42,13 @@ type menuItem struct {
 // wizard and the link question.
 type menu struct {
 	connect func(ctx context.Context, e *env, req connectRequest, abort <-chan struct{}) error
-	check   func(ctx context.Context, e *env, args []string) error
-	remove  func(ctx context.Context, e *env, args []string) error
-	list    func(ctx context.Context, e *env, args []string) error
-	save    func(*config.Profiles) error
-	store   func() (config.SecretStore, error)
+	// check checks the resolvers of one profile: the menu only ever checks the current
+	// profile, and it needs the outcome per entry to offer to drop the dead ones.
+	check  func(ctx context.Context, e *env, name string) ([]resolverOutcome, error)
+	remove func(ctx context.Context, e *env, args []string) error
+	list   func(ctx context.Context, e *env, args []string) error
+	save   func(*config.Profiles) error
+	store  func() (config.SecretStore, error)
 
 	ask prompter
 }
@@ -55,7 +57,7 @@ type menu struct {
 func newMenu() *menu {
 	return &menu{
 		connect: runConnection,
-		check:   runResolversCheck,
+		check:   checkProfileResolvers,
 		remove:  runProfileRm,
 		list:    runProfileList,
 		save:    saveProfiles,
@@ -229,12 +231,15 @@ func (m *menu) loop(ctx context.Context, e *env, store config.SecretStore, sess 
 }
 
 // menuItems returns the items in the order of architecture.md §10a. The number is the
-// position in this table, 1-based, and 0 is exit: the editing items of the next stage drop
-// in after "check resolvers" without touching the dispatch.
+// position in this table, 1-based, and 0 is exit: nothing else in the dispatch changes when
+// an item is added.
 func (m *menu) menuItems() []menuItem {
 	return []menuItem{
 		{label: "connect", run: m.connectItem},
 		{label: "check resolvers", run: m.checkResolversItem},
+		{label: "edit resolvers", run: m.editResolversItem},
+		{label: "new exit password", run: m.newExitPasswordItem},
+		{label: "change domain or key", run: m.changeServerItem},
 		{label: "another profile", run: m.anotherProfileItem},
 		{label: "delete profile", run: m.deleteProfileItem},
 	}
@@ -308,23 +313,20 @@ func reportItemError(e *env, err error) {
 
 // --- the items ---
 
-// connectItem connects the current profile: the body of `connect` without its flags.
+// connectItem shows the current profile's resolvers and offers to change them first, then
+// connects: the offer runs before the body because the body loads the profile from the
+// file, so an edited list is used by this connect exactly because it was saved first.
 func (m *menu) connectItem(ctx context.Context, e *env, abort <-chan struct{}) error {
 	profiles, err := config.LoadProfiles()
 	if err != nil {
 		return err
 	}
-	return m.connect(ctx, e, connectRequest{profileName: currentProfile(profiles)}, abort)
-}
-
-// checkResolversItem checks the resolvers of the current profile. An exitCodeError from the
-// body means nothing passed the check, and the body has printed that itself.
-func (m *menu) checkResolversItem(ctx context.Context, e *env, _ <-chan struct{}) error {
-	profiles, err := config.LoadProfiles()
-	if err != nil {
+	name := currentProfile(profiles)
+	connect, err := m.offerResolvers(ctx, e, profiles, name)
+	if err != nil || !connect {
 		return err
 	}
-	return m.check(ctx, e, []string{currentProfile(profiles)})
+	return m.connect(ctx, e, connectRequest{profileName: name}, abort)
 }
 
 // anotherProfileItem lists the profiles and makes the chosen one the default. An empty
@@ -374,12 +376,19 @@ func (m *menu) deleteProfileItem(ctx context.Context, e *env, _ <-chan struct{})
 	if err != nil {
 		return readError(ctx, err)
 	}
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return m.remove(ctx, e, []string{name})
-	default:
+	if !isYes(answer) {
 		return nil
 	}
+	return m.remove(ctx, e, []string{name})
+}
+
+// isYes reports whether a confirmation was answered yes.
+func isYes(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
 
 // firstProfile asks for the first profile: the hidden link question comes first, an empty

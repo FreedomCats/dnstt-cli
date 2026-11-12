@@ -18,13 +18,15 @@ import (
 )
 
 // menuProfile is a synthetic profile: the documentation domain, the shared key, a
-// documentation resolver and the socks datapath.
+// documentation resolver, the socks datapath and an exit with a login, so the password
+// item is willing to run.
 func menuProfile() *config.Profile {
 	return &config.Profile{
 		Domain:    "t.example.com",
 		Pubkey:    wizardTestPubkey,
 		Resolvers: []string{"udp:192.0.2.53:53"},
 		Datapath:  "socks",
+		Exit:      config.Exit{Type: "socks5", User: "user"},
 	}
 }
 
@@ -95,10 +97,13 @@ type menuHarness struct {
 	env      *env
 
 	connected []connectRequest
-	checked   [][]string
+	checked   []string
 	listed    int
 	removed   [][]string
 	saved     []*config.Profiles
+
+	// checkOutcomes is what the check body returns for a successful run.
+	checkOutcomes []resolverOutcome
 
 	connectErr error
 	checkErr   error
@@ -124,9 +129,9 @@ func newMenuHarness(t *testing.T, answers []scriptedAnswer) *menuHarness {
 		h.connected = append(h.connected, req)
 		return h.connectErr
 	}
-	h.menu.check = func(_ context.Context, _ *env, args []string) error {
-		h.checked = append(h.checked, args)
-		return h.checkErr
+	h.menu.check = func(_ context.Context, _ *env, name string) ([]resolverOutcome, error) {
+		h.checked = append(h.checked, name)
+		return h.checkOutcomes, h.checkErr
 	}
 	h.menu.list = func(_ context.Context, _ *env, _ []string) error {
 		h.listed++
@@ -325,7 +330,7 @@ func TestMenuItemsCallTheCommandBodies(t *testing.T) {
 	}{
 		{
 			name:    "connect",
-			answers: []scriptedAnswer{{value: "1"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "1"}, {value: ""}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return len(h.connected) == 1 },
 		},
 		{
@@ -334,13 +339,28 @@ func TestMenuItemsCallTheCommandBodies(t *testing.T) {
 			ran:     func(h *menuHarness) bool { return len(h.checked) == 1 },
 		},
 		{
+			name:    "edit resolvers",
+			answers: []scriptedAnswer{{value: "3"}, {value: "udp:192.0.2.53:53"}, {value: ""}, {value: "0"}},
+			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 },
+		},
+		{
+			name:    "new exit password",
+			answers: []scriptedAnswer{{value: "4"}, {secret: true, value: "new-password"}, {secret: true, value: "new-password"}, {value: "0"}},
+			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 && h.store.puts == 1 },
+		},
+		{
+			name:    "change domain or key",
+			answers: []scriptedAnswer{{value: "5"}, {value: "new.example.com"}, {value: ""}, {value: "0"}},
+			ran:     func(h *menuHarness) bool { return len(h.saved) == 1 },
+		},
+		{
 			name:    "another profile",
-			answers: []scriptedAnswer{{value: "3"}, {value: "other"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return h.listed == 1 && len(h.saved) == 1 },
 		},
 		{
 			name:    "delete profile",
-			answers: []scriptedAnswer{{value: "4"}, {value: "y"}, {value: "0"}},
+			answers: []scriptedAnswer{{value: "7"}, {value: "y"}, {value: "0"}},
 			ran:     func(h *menuHarness) bool { return len(h.removed) == 1 },
 		},
 	}
@@ -371,7 +391,7 @@ func TestMenuEmptyAnswerConnects(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: ""}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: ""}, {value: ""}, {value: "0"}})
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -440,7 +460,7 @@ func TestMenuAnotherProfile(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, twoProfiles())
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "3"}, {value: "nosuch"}, {value: "other"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "6"}, {value: "nosuch"}, {value: "other"}, {value: "0"}})
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -459,7 +479,7 @@ func TestMenuAnotherProfileFailedSave(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, twoProfiles())
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "3"}, {value: "other"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "6"}, {value: "other"}, {value: "0"}})
 	h.saveErr = errors.New("synthetic save failure")
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
@@ -484,7 +504,7 @@ func TestMenuDeleteProfileAsksFirst(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	no := newMenuHarness(t, []scriptedAnswer{{value: "4"}, {value: "n"}, {value: "0"}})
+	no := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "n"}, {value: "0"}})
 	if err := no.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -499,7 +519,7 @@ func TestMenuDeleteProfileAsksFirst(t *testing.T) {
 		t.Fatal("the menu did not continue after the refusal")
 	}
 
-	yes := newMenuHarness(t, []scriptedAnswer{{value: "4"}, {value: "yes"}, {value: "0"}})
+	yes := newMenuHarness(t, []scriptedAnswer{{value: "7"}, {value: "yes"}, {value: "0"}})
 	if err := yes.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
 	}
@@ -515,7 +535,7 @@ func TestMenuDeleteDefaultLeavesTheProfileChoice(t *testing.T) {
 	writeMenuProfiles(t, threeProfiles())
 
 	h := newMenuHarness(t, []scriptedAnswer{
-		{value: "4"},     // delete profile
+		{value: "7"},     // delete profile
 		{value: "y"},     // confirm
 		{value: "other"}, // the profile to work with
 		{value: "0"},     // leave
@@ -646,7 +666,7 @@ func TestMenuCheckResolversExitsAndSurvives(t *testing.T) {
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop ended on exitCodeError: %v", err)
 	}
-	if len(h.checked) != 1 || !slices.Equal(h.checked[0], []string{"home"}) {
+	if len(h.checked) != 1 || h.checked[0] != "home" {
 		t.Fatalf("check was called with %q, want the current profile", h.checked)
 	}
 	if h.errOut.Len() != 0 {
@@ -661,7 +681,7 @@ func TestMenuFailedItemIsPrintedAndTheLoopContinues(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: ""}, {value: "0"}})
 	h.connectErr = errors.New("synthetic failure")
 	if err := h.runLoop(context.Background()); err != nil {
 		t.Fatalf("the loop = %v", err)
@@ -900,7 +920,7 @@ func TestMenuInterruptStopsTheItem(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: ""}, {value: "0"}})
 	body := newSignalConnectBody(false)
 	body.install(h)
 
@@ -930,7 +950,7 @@ func TestMenuSecondInterruptClosesTheAbort(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: "0"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: ""}, {value: "0"}})
 	body := newSignalConnectBody(true)
 	body.install(h)
 
@@ -959,7 +979,7 @@ func TestMenuThirdInterruptDoesNotExit(t *testing.T) {
 	isolatedConnectConfig(t)
 	writeMenuProfiles(t, oneProfile("home"))
 
-	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}})
+	h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: ""}})
 	ask := newWaitingPrompter(h.prompter)
 	h.menu.ask = ask
 	body := newSignalConnectBody(true)
@@ -970,6 +990,11 @@ func TestMenuThirdInterruptDoesNotExit(t *testing.T) {
 
 	if got := <-ask.asks; got != "Choice [1]: " {
 		t.Fatalf("the menu did not ask for a choice: %q", got)
+	}
+	// The offer asks before the body starts: its answer is scripted, so the connection
+	// starts at once, and the question is read from the queue before the next choice.
+	if got := <-ask.asks; got != offerResolversQuestion {
+		t.Fatalf("the offer did not ask for the resolvers: %q", got)
 	}
 	<-body.started
 	run.sig <- os.Interrupt
@@ -997,7 +1022,7 @@ func TestMenuTermSignalEndsTheLoop(t *testing.T) {
 
 	for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGHUP} {
 		t.Run(fmt.Sprint(sig), func(t *testing.T) {
-			h := newMenuHarness(t, []scriptedAnswer{{value: "1"}})
+			h := newMenuHarness(t, []scriptedAnswer{{value: "1"}, {value: ""}})
 			body := newSignalConnectBody(false)
 			body.install(h)
 

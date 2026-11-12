@@ -147,14 +147,28 @@ func (w *wizard) askName(ctx context.Context, profiles *config.Profiles) (string
 
 // askDomain asks the tunnel domain and returns the trimmed value.
 func (w *wizard) askDomain(ctx context.Context) (string, error) {
+	return askDomainValue(ctx, w.ask, w.out, "")
+}
+
+// askDomainValue asks the tunnel domain and returns the trimmed value. With a current value
+// the question carries it as the default, masked as `profile show` does, and an empty answer
+// keeps it. The menu's editor and the wizard share the wording and the validator.
+func askDomainValue(ctx context.Context, ask prompter, out io.Writer, current string) (string, error) {
+	question := "Tunnel domain: "
+	if current != "" {
+		question = fmt.Sprintf("Domain [%s]: ", maskSensitive(current))
+	}
 	for {
-		answer, err := w.readLine(ctx, "Tunnel domain: ")
+		answer, err := readLineFrom(ctx, ask, question)
 		if err != nil {
 			return "", err
 		}
 		domain := strings.TrimSpace(answer)
+		if domain == "" && current != "" {
+			return current, nil
+		}
 		if err := config.ValidDomainName(domain); err != nil {
-			fmt.Fprintln(w.out, err)
+			fmt.Fprintln(out, err)
 			continue
 		}
 		return domain, nil
@@ -163,14 +177,27 @@ func (w *wizard) askDomain(ctx context.Context) (string, error) {
 
 // askPubkey asks the server public key; the reason names the expected form, never the value.
 func (w *wizard) askPubkey(ctx context.Context) (string, error) {
+	return askPubkeyValue(ctx, w.ask, w.out, "")
+}
+
+// askPubkeyValue is askDomainValue for the server public key: with a current value the
+// question carries it masked, and an empty answer keeps it.
+func askPubkeyValue(ctx context.Context, ask prompter, out io.Writer, current string) (string, error) {
+	question := "Server public key: "
+	if current != "" {
+		question = fmt.Sprintf("Server public key [%s]: ", maskSensitive(current))
+	}
 	for {
-		answer, err := w.readLine(ctx, "Server public key: ")
+		answer, err := readLineFrom(ctx, ask, question)
 		if err != nil {
 			return "", err
 		}
 		pubkey := strings.TrimSpace(answer)
+		if pubkey == "" && current != "" {
+			return current, nil
+		}
 		if !config.IsValidPubkey(pubkey) {
-			fmt.Fprintln(w.out, "the server public key must be exactly 64 hex digits")
+			fmt.Fprintln(out, "the server public key must be exactly 64 hex digits")
 			continue
 		}
 		return pubkey, nil
@@ -250,30 +277,36 @@ func (w *wizard) askExitType(ctx context.Context) (string, error) {
 // askPassword asks the exit password twice, hidden. The answer never reaches the output:
 // only the reasons do.
 func (w *wizard) askPassword(ctx context.Context, exitType string) (string, error) {
+	return askExitPassword(ctx, w.ask, w.out, exitType)
+}
+
+// askExitPassword asks the exit password twice, hidden. The answer never reaches the output:
+// only the reasons do. The menu's editor and the wizard share the rules.
+func askExitPassword(ctx context.Context, ask prompter, out io.Writer, exitType string) (string, error) {
 	for {
-		first, err := w.readSecret(ctx, "Exit password: ")
+		first, err := readSecretFrom(ctx, ask, "Exit password: ")
 		if err != nil {
 			return "", err
 		}
 		if first == "" {
-			fmt.Fprintln(w.out, "the exit password must not be empty")
+			fmt.Fprintln(out, "the exit password must not be empty")
 			continue
 		}
 		if strings.ContainsFunc(first, unicode.IsControl) {
-			fmt.Fprintln(w.out, "the exit password must not contain control characters")
+			fmt.Fprintln(out, "the exit password must not contain control characters")
 			continue
 		}
 		if exitType == "socks5" && len(first) > 255 {
-			fmt.Fprintln(w.out, "a SOCKS5 password must be at most 255 bytes")
+			fmt.Fprintln(out, "a SOCKS5 password must be at most 255 bytes")
 			continue
 		}
 
-		again, err := w.readSecret(ctx, "Exit password again: ")
+		again, err := readSecretFrom(ctx, ask, "Exit password again: ")
 		if err != nil {
 			return "", err
 		}
 		if again != first {
-			fmt.Fprintln(w.out, "the passwords do not match")
+			fmt.Fprintln(out, "the passwords do not match")
 			continue
 		}
 		return first, nil
@@ -284,6 +317,14 @@ func (w *wizard) askPassword(ctx context.Context, exitType string) (string, erro
 // empty later answer finishes. The line is stored as typed, so a preset name stays short;
 // a duplicate resolver is dropped by its normalized form.
 func (w *wizard) askResolvers(ctx context.Context) ([]string, error) {
+	return askResolverList(ctx, w.ask, w.out)
+}
+
+// askResolverList asks the resolvers one per line. An empty first answer is "network", an
+// empty later answer finishes. The line is stored as typed, so a preset name stays short;
+// a duplicate resolver is dropped by its normalized form. The menu's editor and the wizard
+// share the questions and the rules.
+func askResolverList(ctx context.Context, ask prompter, out io.Writer) ([]string, error) {
 	const (
 		first = `Resolver (Enter for "network"): `
 		next  = "Another resolver (Enter to finish): "
@@ -293,7 +334,7 @@ func (w *wizard) askResolvers(ctx context.Context) ([]string, error) {
 	var entries []string
 	var seen []resolvers.Resolver
 	for {
-		answer, err := w.readLine(ctx, question)
+		answer, err := readLineFrom(ctx, ask, question)
 		if err != nil {
 			return nil, err
 		}
@@ -306,7 +347,7 @@ func (w *wizard) askResolvers(ctx context.Context) ([]string, error) {
 		}
 		parsed, err := resolvers.Expand([]string{line})
 		if err != nil {
-			fmt.Fprintln(w.out, err)
+			fmt.Fprintln(out, err)
 			continue
 		}
 		if slices.ContainsFunc(seen, func(r resolvers.Resolver) bool { return r.String() == parsed[0].String() }) {
@@ -353,13 +394,24 @@ func (w *wizard) askMode(ctx context.Context) (string, error) {
 // readLine asks a question and turns the end of input into errCancelled. A cancelled
 // context is returned as itself, so `run` reports "interrupted".
 func (w *wizard) readLine(ctx context.Context, question string) (string, error) {
-	answer, err := w.ask.Ask(ctx, question)
-	return answer, readError(ctx, err)
+	return readLineFrom(ctx, w.ask, question)
 }
 
 // readSecret is readLine for a hidden answer.
 func (w *wizard) readSecret(ctx context.Context, question string) (string, error) {
-	answer, err := w.ask.AskSecret(ctx, question)
+	return readSecretFrom(ctx, w.ask, question)
+}
+
+// readLineFrom is readLine over any prompter: the free questions of the menu and the
+// wizard's methods share it.
+func readLineFrom(ctx context.Context, ask prompter, question string) (string, error) {
+	answer, err := ask.Ask(ctx, question)
+	return answer, readError(ctx, err)
+}
+
+// readSecretFrom is readLineFrom for a hidden answer.
+func readSecretFrom(ctx context.Context, ask prompter, question string) (string, error) {
+	answer, err := ask.AskSecret(ctx, question)
 	return answer, readError(ctx, err)
 }
 

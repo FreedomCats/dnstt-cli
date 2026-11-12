@@ -65,35 +65,43 @@ func runResolversCheck(ctx context.Context, e *env, args []string) error {
 		return usagef("extra argument: resolvers check takes at most one profile name")
 	}
 
+	_, err := checkProfileResolvers(ctx, e, profileName)
+	return err
+}
+
+// checkProfileResolvers checks the resolvers of one profile: the load, the default profile
+// when the name is empty, the domain and key parse, the resolvers' expansion and the
+// checks themselves. The command and the menu share it.
+func checkProfileResolvers(ctx context.Context, e *env, profileName string) ([]resolverOutcome, error) {
 	// Load profiles.
 	profiles, err := config.LoadProfiles()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Find the profile to use.
 	if profileName == "" {
 		profileName = profiles.DefaultProfile
 		if profileName == "" {
-			return errors.New("no default profile set")
+			return nil, errors.New("no default profile set")
 		}
 	}
 	prof, ok := profiles.Profile[profileName]
 	if !ok {
-		return fmt.Errorf("profile %q not found", profileName)
+		return nil, fmt.Errorf("profile %q not found", profileName)
 	}
 
 	// Parse the domain and public key.
 	domain, err := dns.ParseName(prof.Domain)
 	if err != nil {
-		return fmt.Errorf("domain: %w", err)
+		return nil, fmt.Errorf("domain: %w", err)
 	}
 	pubkey, err := hex.DecodeString(prof.Pubkey)
 	if err != nil {
-		return fmt.Errorf("pubkey: %w", err)
+		return nil, fmt.Errorf("pubkey: %w", err)
 	}
 	if len(pubkey) != 32 {
-		return fmt.Errorf("pubkey: expected 32 bytes, got %d", len(pubkey))
+		return nil, fmt.Errorf("pubkey: expected 32 bytes, got %d", len(pubkey))
 	}
 
 	// Parse resolvers.
@@ -103,23 +111,41 @@ func runResolversCheck(ctx context.Context, e *env, args []string) error {
 	}
 	expanded, err := resolvers.Expand(resolverList)
 	if err != nil {
-		return fmt.Errorf("resolvers: %w", err)
+		return nil, fmt.Errorf("resolvers: %w", err)
 	}
 
-	return runResolverChecks(ctx, e, profileName, prof, domain, pubkey, expanded, app.SystemNetworkDNS, client.Dial)
+	return checkResolvers(ctx, e, profileName, prof, domain, pubkey, expanded, app.SystemNetworkDNS, client.Dial)
 }
 
 type resolverDialFunc func(context.Context, client.Config) (*client.Session, error)
 
 func runResolverChecks(ctx context.Context, e *env, profileName string, prof *config.Profile, domain dns.Name, pubkey []byte, expanded []resolvers.Resolver, networkDNS func() ([]netip.Addr, error), dial resolverDialFunc) error {
+	_, err := checkResolvers(ctx, e, profileName, prof, domain, pubkey, expanded, networkDNS, dial)
+	return err
+}
+
+// resolverOutcome is one checked entry: the profile entry it came from, the name that was
+// printed, and whether the handshake passed.
+type resolverOutcome struct {
+	entry string
+	name  string
+	ok    bool
+}
+
+// checkResolvers runs the checks and prints their lines. It returns the outcome of every
+// check, or no outcomes when nothing passed: there is nothing to drop from a run where
+// every resolver failed, and the exitCodeError carries that result.
+func checkResolvers(ctx context.Context, e *env, profileName string, prof *config.Profile, domain dns.Name, pubkey []byte, expanded []resolvers.Resolver, networkDNS func() ([]netip.Addr, error), dial resolverDialFunc) ([]resolverOutcome, error) {
 	checks := resolverChecks(expanded, prof.Bootstrap, networkDNS)
 	fmt.Fprintf(e.stdout, "Checking %d resolver(s) for profile %q...\n", len(checks), profileName)
 
+	var outcomes []resolverOutcome
 	anyPassed := false
 	for _, check := range checks {
 		r := check.resolver
 		if check.err != nil {
 			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, check.err)
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name})
 			continue
 		}
 
@@ -142,22 +168,28 @@ func runResolverChecks(ctx context.Context, e *env, profileName string, prof *co
 
 		if err != nil {
 			fmt.Fprintf(e.stdout, "  %s: FAILED (%v)\n", check.name, err)
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name})
 		} else {
 			fmt.Fprintf(e.stdout, "  %s: OK (%v)\n", check.name, elapsed.Truncate(time.Millisecond))
 			session.Close()
 			anyPassed = true
+			outcomes = append(outcomes, resolverOutcome{entry: check.entry, name: check.name, ok: true})
 		}
 	}
 
 	if !anyPassed {
 		fmt.Fprintf(e.stderr, "\nNo resolver passed the check.\n")
-		return &exitCodeError{code: exitError}
+		return nil, &exitCodeError{code: exitError}
 	}
 
-	return nil
+	return outcomes, nil
 }
 
 type resolverCheck struct {
+	// entry is the profile entry the check came from: the resolver's name, the network
+	// entry for one of the system servers, or "" for the bootstrap parse error, which is
+	// not a resolver of the profile.
+	entry    string
 	name     string
 	resolver resolvers.Resolver
 	lookup   resolvers.LookupFunc
@@ -179,21 +211,21 @@ func resolverChecks(list []resolvers.Resolver, own []string, networkDNS func() (
 	var checks []resolverCheck
 	for _, r := range list {
 		if !r.Network {
-			checks = append(checks, resolverCheck{name: r.Name(), resolver: r, lookup: r.LookupIP(bootstrap.LookupIP)})
+			checks = append(checks, resolverCheck{entry: r.Name(), name: r.Name(), resolver: r, lookup: r.LookupIP(bootstrap.LookupIP)})
 			continue
 		}
 		servers, err := networkDNS()
 		if err != nil {
-			checks = append(checks, resolverCheck{name: r.Name(), err: fmt.Errorf("network DNS: %w", err)})
+			checks = append(checks, resolverCheck{entry: resolvers.NetworkEntry, name: r.Name(), err: fmt.Errorf("network DNS: %w", err)})
 			continue
 		}
 		if len(servers) == 0 {
-			checks = append(checks, resolverCheck{name: r.Name(), err: errors.New("network DNS: the system has no DNS server")})
+			checks = append(checks, resolverCheck{entry: resolvers.NetworkEntry, name: r.Name(), err: errors.New("network DNS: the system has no DNS server")})
 			continue
 		}
 		for _, server := range servers {
 			networkResolver := resolvers.NetworkResolver(server)
-			checks = append(checks, resolverCheck{name: fmt.Sprintf("network (%s)", server), resolver: networkResolver, lookup: networkResolver.LookupIP(bootstrap.LookupIP)})
+			checks = append(checks, resolverCheck{entry: resolvers.NetworkEntry, name: fmt.Sprintf("network (%s)", server), resolver: networkResolver, lookup: networkResolver.LookupIP(bootstrap.LookupIP)})
 		}
 	}
 	return checks

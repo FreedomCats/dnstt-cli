@@ -34,7 +34,11 @@ items, the reuse of the command bodies and the signals of §10a.
   sits at the bottom and is absent with redirected output.
 - When no resolver completes a handshake for a full round mid-session, the menu offers to
   check and edit them and connects again.
-- `connect` on the command line behaves exactly as before.
+- `connect` on the command line behaves exactly as before: the same flags, messages, status
+  line, drain and exit codes. A signal that arrives while the tunnel is still being set up now
+  stops cleanly with the same `stopping...` line instead of killing the process, because the
+  stop ladder is armed before the connection body; that window used to leave the routes and the
+  system DNS behind.
 
 ## Children
 
