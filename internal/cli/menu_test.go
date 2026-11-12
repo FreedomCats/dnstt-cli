@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/FreedomCats/dnstt-cli/internal/config"
+	"github.com/FreedomCats/dnstt-cli/internal/datapath"
+	"github.com/FreedomCats/dnstt-cli/internal/sudo"
 	"github.com/FreedomCats/dnstt-cli/internal/supervisor"
 )
 
@@ -29,6 +31,14 @@ func menuProfile() *config.Profile {
 		Datapath:  "socks",
 		Exit:      config.Exit{Type: "socks5", User: "user"},
 	}
+}
+
+// menuTunProfile is the same profile over the tun datapath: the elevation decision has
+// something to decide.
+func menuTunProfile() *config.Profile {
+	prof := menuProfile()
+	prof.Datapath = "tun"
+	return prof
 }
 
 // oneProfile is the set of one profile, which is also its default.
@@ -103,6 +113,12 @@ type menuHarness struct {
 	removed   [][]string
 	saved     []*config.Profiles
 
+	// elevated is the profile name of every call of the injected elevated runner;
+	// elevateCode and elevateErr are what it returns.
+	elevated    []string
+	elevateCode int
+	elevateErr  error
+
 	// checkOutcomes is what the check body returns for a successful run.
 	checkOutcomes []resolverOutcome
 
@@ -135,6 +151,23 @@ func newMenuHarness(t *testing.T, answers []scriptedAnswer) *menuHarness {
 	h.env = &env{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
 
 	h.menu = newMenu()
+	// The elevation decision needs nothing here: a socks profile must never make an
+	// existing test look for sudo on the machine.
+	h.menu.elevation = func() elevationEnv {
+		return elevationEnv{
+			requires: datapath.Requirements{},
+			invoker: func() (*sudo.User, error) {
+				return nil, errors.New("the elevation decision must not look for sudo")
+			},
+			lookPath: func(string) (string, error) {
+				return "", errors.New("the elevation decision must not look for sudo")
+			},
+		}
+	}
+	h.menu.elevate = func(_ context.Context, _ *env, name string) (int, error) {
+		h.elevated = append(h.elevated, name)
+		return h.elevateCode, h.elevateErr
+	}
 	h.menu.ask = h.prompter
 	h.menu.store = func() (config.SecretStore, error) { return h.store, nil }
 	h.menu.connect = func(ctx context.Context, _ *env, req connectRequest, _ <-chan struct{}) error {

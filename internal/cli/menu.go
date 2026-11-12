@@ -50,18 +50,27 @@ type menu struct {
 	save   func(*config.Profiles) error
 	store  func() (config.SecretStore, error)
 
+	// elevation is what the elevation decision reads: the platform, the privileges and
+	// sudo. A test replaces it to ask about any system without root or a real sudo.
+	elevation func() elevationEnv
+	// elevate runs one connection as the same binary under sudo and returns its exit
+	// status. runWith binds it to runElevated with the session it has just made; a test
+	// supplies its own.
+	elevate func(ctx context.Context, e *env, name string) (int, error)
+
 	ask prompter
 }
 
 // newMenu builds the menu over the command bodies themselves.
 func newMenu() *menu {
 	return &menu{
-		connect: runConnection,
-		check:   checkProfileResolvers,
-		remove:  runProfileRm,
-		list:    runProfileList,
-		save:    saveProfiles,
-		store:   newSecretStore,
+		connect:   runConnection,
+		check:     checkProfileResolvers,
+		remove:    runProfileRm,
+		list:      runProfileList,
+		save:      saveProfiles,
+		store:     newSecretStore,
+		elevation: systemElevation,
 	}
 }
 
@@ -120,6 +129,13 @@ func (m *menu) runWith(ctx context.Context, e *env, name string, sigCh <-chan os
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sess := newMenuSession(e.stderr, cancel)
+	if m.elevate == nil {
+		// The menu's own session is what leaves the terminal's signals to the child while
+		// the elevated run is on.
+		m.elevate = func(ctx context.Context, e *env, name string) (int, error) {
+			return runElevated(ctx, e, name, sess)
+		}
+	}
 
 	done := make(chan struct{})
 	watched := make(chan struct{})

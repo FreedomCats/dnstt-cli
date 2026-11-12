@@ -14,8 +14,27 @@ const roundOfferQuestion = "Check and edit resolvers? (y/N): "
 
 // connectWithResolvers connects and, when a full round of handshakes fails after the
 // tunnel has been up, stops the connection, offers to check and edit the resolvers and
-// connects again with the saved list.
+// connects again with the saved list. Before the connection the elevation decision is
+// taken: a tun profile that needs root runs as one elevated child, and a datapath that
+// cannot run here is replaced by socks for this time.
 func (m *menu) connectWithResolvers(ctx context.Context, e *env, name string, abort <-chan struct{}) error {
+	plan, err := m.elevationPlan(name)
+	if err != nil {
+		return err
+	}
+	switch {
+	case plan.reason != "":
+		return m.socksInstead(ctx, e, name, plan.reason, abort)
+	case plan.sudo:
+		return m.elevatedConnection(ctx, e, name, abort)
+	}
+	return m.connectSessions(ctx, e, name, "", abort)
+}
+
+// connectSessions runs the connection and the mid-session resolver offer. datapath
+// overrides the profile's ("" keeps it, "socks" is the fallback offered for this time) and
+// otherwise changes nothing.
+func (m *menu) connectSessions(ctx context.Context, e *env, name, datapath string, abort <-chan struct{}) error {
 	for {
 		rounds := make(chan []supervisor.ResolverFailure, 1)
 		connCtx, connCancel := context.WithCancel(ctx)
@@ -23,6 +42,7 @@ func (m *menu) connectWithResolvers(ctx context.Context, e *env, name string, ab
 		go func() {
 			done <- m.connect(connCtx, e, connectRequest{
 				profileName: name,
+				datapath:    datapath,
 				onRoundFailed: func(failures []supervisor.ResolverFailure) {
 					// The callback runs on the supervisor's Run goroutine: it must not
 					// block, and a round nobody waits for is dropped.

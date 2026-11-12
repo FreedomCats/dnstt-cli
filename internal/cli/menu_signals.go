@@ -13,7 +13,7 @@ import (
 
 // menuSession holds what the signals of architecture.md §10a do to one menu run: the menu's
 // own cancel, the running item's cancel and abort channel, and the press count of that
-// item.
+// item. While an elevated child runs, suspend leaves every signal to it.
 //
 // The rules are the command's, minus the exit: the first Ctrl+C stops the item, the second
 // does not wait for open connections, the third does nothing. os.Exit on the third press
@@ -34,6 +34,9 @@ type menuSession struct {
 	abort chan struct{}
 	// presses is the count of Ctrl+C of the running item.
 	presses int
+	// suspended leaves the terminal's signals to an elevated child: handle returns on
+	// every signal until resume.
+	suspended bool
 }
 
 func newMenuSession(notice io.Writer, cancel context.CancelFunc) *menuSession {
@@ -63,6 +66,24 @@ func (s *menuSession) idle() {
 	s.presses = 0
 }
 
+// suspend leaves the terminal's signals to the child: while an elevated run is on, the
+// parent takes none, and the kernel delivers the presses to the foreground process group,
+// the child first. It is a flag, not a second ladder: resume brings the item's rules back.
+func (s *menuSession) suspend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.suspended = true
+}
+
+// resume restores the session's rules after an elevated run.
+func (s *menuSession) resume() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.suspended = false
+}
+
 // watch consumes the signals until the caller closes done. The caller creates and stops the
 // channel: runMenu wires signal.Notify, tests inject their own.
 func (s *menuSession) watch(sig <-chan os.Signal, done <-chan struct{}) {
@@ -80,6 +101,12 @@ func (s *menuSession) watch(sig <-chan os.Signal, done <-chan struct{}) {
 func (s *menuSession) handle(sig os.Signal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.suspended {
+		// While a child runs, the terminal's signals are the child's: it receives them
+		// from the kernel anyway, and the parent takes none and prints nothing.
+		return
+	}
 
 	switch sig {
 	case os.Interrupt:

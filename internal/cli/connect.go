@@ -113,6 +113,16 @@ type connectRequest struct {
 	onRoundFailed func([]supervisor.ResolverFailure)
 }
 
+// datapathOf is the datapath a connection of the profile runs: the profile's, then socks,
+// the product default. The menu asks it too: the elevation decision must see the same
+// datapath the body will run.
+func datapathOf(prof *config.Profile) string {
+	if prof.Datapath != "" {
+		return prof.Datapath
+	}
+	return "socks"
+}
+
 // runConnection connects once: it loads the profile, builds the tunnel and the datapath,
 // and runs until stopped. abort is the caller's force-abort channel: closing it stops the
 // wait for open connections instead of draining them.
@@ -140,12 +150,9 @@ func runConnection(ctx context.Context, e *env, req connectRequest, abort <-chan
 	}
 
 	// The datapath of the run: the flag, then the profile, then socks.
-	kind := prof.Datapath
+	kind := datapathOf(prof)
 	if req.datapath != "" {
 		kind = req.datapath
-	}
-	if kind == "" {
-		kind = "socks"
 	}
 	p := *prof
 	p.Datapath = kind
