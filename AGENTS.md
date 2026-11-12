@@ -87,11 +87,8 @@ environment; the course of work stays in `doc/local/`.
 
 ## Third-party code under an incompatible license
 
-The dnstt-cli license is not chosen yet (`doc/analysis.md`, §6). Until it is, the strict
-variant applies — as for a shell under MIT — so that neither option is closed off.
-
-The implementer — whoever writes the code — does not open code under a license
-incompatible with the shell's license. Currently that is:
+The shell is MIT (`LICENSE`; `doc/analysis.md`, §6). The implementer — whoever writes the
+code — does not open code under a license incompatible with MIT. That is:
 
 - the GPL-3 parts of qwdtt-cli: `internal/core` (vendored qWDTT),
   `supervisor/restart.go`, `captcha/token.go`, `captcha/solver.go` and their tests;

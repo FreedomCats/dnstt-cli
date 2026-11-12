@@ -50,3 +50,12 @@ profiles, secrets, routes, DNS protection, kill-switch, network tracking — is 
 Go 1.26 or newer:
 
     go build ./cmd/dnstt-cli
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). You may use, modify and redistribute the program, also in
+a closed-source product, as long as the copyright notice and the permission notice are kept.
+The program comes with no warranty.
+
+The tunnel core in `core/` is dnstt, public domain (CC0); the licenses of the Go
+dependencies are listed in `THIRD_PARTY_NOTICES.txt` of the release archives.

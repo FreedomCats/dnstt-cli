@@ -10,7 +10,7 @@ in the foreground while `dnstt-cli connect` runs.
 
 - **Core:** the dnstt client from the [FreedomCats mirror](https://github.com/FreedomCats/dnstt)
   of the upstream, version `v1.20260501.0`, public domain (CC0)
-- **Own code:** license not chosen yet; MIT recommended (`analysis.md`, §6; §11 below)
+- **Own code:** MIT (`LICENSE`; `analysis.md`, §6; §11 below)
 - **Shell base:** [csqtt-cli](https://github.com/FreedomCats/csqtt-cli) (MIT) — profiles,
   secrets, menu, routes, DNS, kill-switch, network tracking, release scripts
 - **Platform priority:** Linux → Windows. macOS — `socks` only
@@ -672,7 +672,7 @@ From csqtt-cli: the menu has no logic of its own, it calls the same code as the 
 | Part | License | Where |
 |---|---|---|
 | dnstt core and our patches to it | public domain (CC0) | `core/` |
-| shell | not chosen; MIT recommended | everything else |
+| shell | MIT (`LICENSE`) | everything else |
 | Go dependencies | MIT, BSD, Apache-2.0 | `THIRD_PARTY_NOTICES.txt` |
 
 No code under an incompatible license enters the shell (`AGENTS.md`): the GPL parts of

@@ -1,6 +1,6 @@
 ---
 kind: task
-status: todo
+status: done
 ---
 
 # The MIT license
@@ -43,3 +43,22 @@ archives' copies of `LICENSE` (the release task), and the core's `core/COPYING`.
   `doc/architecture.md` §11.
 - Link, whitespace and privacy checks pass; no date, environment or personal detail is in the
   changed files.
+
+## Outcome
+
+Done, and it is a documentation change only: no code, no test and no build file was touched.
+
+- `LICENSE` at the root holds the MIT text with the project's name in the copyright line
+  (`FreedomCats`, as in the commits) and no personal name and no year.
+- `README.md` has a short "License" section: what MIT permits, a pointer to `LICENSE`, the
+  core's CC0 in `core/` and the dependency licenses in the archives' `THIRD_PARTY_NOTICES.txt`.
+- `AGENTS.md`, "Third-party code under an incompatible license": the shell is MIT and the rule
+  is measured against MIT; the lists of parts that stay closed (the GPL-3 parts of qwdtt-cli,
+  the AGPL-3 SlipNet and SlipGate, the PolyForm core of csqtt-cli) and of parts that may be
+  carried (csqtt-cli MIT, the dnstt core CC0) are unchanged.
+- `doc/analysis.md` §6 is "License: MIT" and records the choice instead of the recommendation;
+  `doc/architecture.md` says MIT in the header list and in the §11 table.
+
+Not done here, on purpose: source-file headers (there are none), `THIRD_PARTY_NOTICES.txt`,
+the copies of `LICENSE` and `COPYING` inside the release archives and the `README` rewrite —
+the release task. `core/COPYING` is untouched.

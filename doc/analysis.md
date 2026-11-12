@@ -204,14 +204,13 @@ needs none of it.
 
 ---
 
-## 6. License: recommendation — MIT
+## 6. License: MIT
 
-All the shell code dnstt-cli needs is in csqtt-cli under MIT: it is the qwdtt-cli shell
-without its GPL parts. Those parts (the qWDTT core, the restart sequence, captcha token
-interception) are not needed by dnstt-cli. The dnstt core is public domain and compatible
-with any license. So GPL gives nothing: the qwdtt-cli code that would justify it is not
-needed here. The decision is the user's; until it is made, `AGENTS.md` keeps the strict
-variant.
+The shell is MIT (`LICENSE`). All the shell code dnstt-cli needs is in csqtt-cli under MIT:
+it is the qwdtt-cli shell without its GPL parts. Those parts (the qWDTT core, the restart
+sequence, captcha token interception) are not needed by dnstt-cli. The dnstt core is public
+domain and compatible with any license. So GPL would give nothing: the qwdtt-cli code that
+would justify it is not needed here.
 
 ---
 
