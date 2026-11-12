@@ -169,8 +169,9 @@ after the runs; nothing of them entered the repository or the journal.
   ended only at the requested length and its closure was confirmed. The server's progress
   appeared about every ten seconds.
 - The raw records are the six `*-timeout-dial.log` and `*-timeout-idle.log` files of this run
-  in `doc/runs/logs/`; the console captures stay in `/tmp/opencode/live-run/evidence/`; the
-  summary, conditions and derivation are in `doc/local/plan-timeouts-and-danted.md`.
+  in `doc/runs/logs/`; the console captures stay in an ignored temporary directory outside
+  the repository; the summary, conditions and derivation are in
+  `doc/local/plan-timeouts-and-danted.md`.
 
 After the numbers were presented, the user approved the derived policy: **keepalive 30 s**,
 2.5x the worst healthy-silence bound (12.0 s) with the server's ~10 s progress period. smux

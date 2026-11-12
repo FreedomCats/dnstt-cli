@@ -52,11 +52,9 @@ working resolver supplied, the container cannot reach it) is recorded as
 2. **Build offline.** With `GOTOOLCHAIN=go1.26.2 GOPROXY=off GOSUMDB=off CGO_ENABLED=0
    GOOS=linux GOARCH=amd64` and `-mod=readonly`: `go build -o build/out/dnstt-cli
    ./cmd/dnstt-cli` and `go build -o build/out/live ./doc/runs/_live`. Check both with
-   `file`: Linux amd64, statically linked. The system `go` is older than `go.mod`'s
-   `go 1.26.2`, so `GOTOOLCHAIN=local` with it cannot build the module; use the cached
-   1.26.2 toolchain through `GOTOOLCHAIN` (no machine path in a tracked file). A missing
-   cached module or toolchain is not a reason to fetch: stop and report. The container has
-   no Go; nothing is built there.
+   `file`: Linux amd64, statically linked. Use the module's required toolchain through
+   `GOTOOLCHAIN` (no machine path in a tracked file). A missing module or toolchain is not
+   a reason to fetch: stop and report. The container has no Go; nothing is built there.
 
 3. **Temporary profiles and file-backed store.** Create `<run-id>/cfg/dnstt-cli/` (0700)
    with `profiles.toml` (0600): `default_profile = "real-doh"`; four profiles `real-doh`,
@@ -281,9 +279,9 @@ checksum, the links, the Docker networks and the image id, and `git status --sho
 only this roadmap node, the only difference being another project's container age. `R10`
 is filled at the stage level from this run.
 
-Deviations and run notes: the system Go is older than `go.mod` requires, so the cached
-`go1.26.2` toolchain was invoked offline as in the comparison; `GOTOOLCHAIN=go1.26.2` with
-`GOSUMDB=off` failed before any fetch, and the build record keeps the working command.
+Deviations and run notes: the module's required toolchain was used offline as in the
+comparison; `GOTOOLCHAIN=go1.26.2` with `GOSUMDB=off` failed before any fetch, and the
+build record keeps the working command.
 `pkill` is absent from the image, so a SIGINT through `/proc` stopped the sessions. R2's
 recheck is the one planned `--disable-quic` retry. The target is plain text, so the title
 check is recorded as not applicable and the DOM is the page result. No values, resolvers,

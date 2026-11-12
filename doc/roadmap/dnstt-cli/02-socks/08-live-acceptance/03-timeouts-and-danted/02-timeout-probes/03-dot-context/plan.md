@@ -135,7 +135,7 @@ observation. Lead resumes the saved command coordinator only after this prerequi
 
 ### Validation matrix
 
-Use a cached toolchain satisfying `go.mod` and cached dependencies only, with
+Use the module's required toolchain and its dependencies offline only, with
 `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`. The
 [parent matrix](../../plan.md#local-validation-for-code-children) applies in full to this
 core/vendor/product change, not only to the ignored tool:

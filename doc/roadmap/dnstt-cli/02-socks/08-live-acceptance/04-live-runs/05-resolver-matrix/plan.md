@@ -88,17 +88,16 @@ and follows the [stage design](../plan.md#run-design).
    host's CA bundle read-only. Record that in `<run-id>/permission.txt`; a step that would
    need a fetch stops and is reported instead.
 
-2. **Build offline, on the host.** The wrapper `go` on `PATH` is older than `go.mod`
-   requires, `GOTOOLCHAIN=local` with it cannot build, and `GOTOOLCHAIN=go1.26.2` with
-   `GOSUMDB=off` failed before any fetch in `real-2`; use the cached 1.26.2 toolchain
-   directly, its path from `go env GOMODCACHE` (no machine path in a tracked file):
+2. **Build offline, on the host.** `GOTOOLCHAIN=go1.26.2` with `GOSUMDB=off` failed before
+   any fetch in `real-2`; use the module's required toolchain directly, its path from
+   `go env GOMODCACHE` (no machine path in a tracked file):
    `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64
    "$(go env GOMODCACHE)/golang.org/toolchain@v0.0.1-go1.26.2.linux-amd64/bin/go" build
    -mod=readonly -o build/out/dnstt-cli ./cmd/dnstt-cli`. Record the command, `rc`, that
    toolchain's `go version`, `file build/out/dnstt-cli` (ELF x86-64, statically linked)
    and `sha256sum` in `<run-id>/build.txt`. Only `dnstt-cli` is built: no `live`, no
    upstream `dnstt-client`, no control-fetch — this run has no target, no exit and no
-   comparison. A missing cached toolchain or module stops the task; nothing is fetched, and
+   comparison. A missing toolchain or module stops the task; nothing is fetched, and
    nothing is built in the container.
 
 3. **Temporary profiles for R7 and R8.** Write `<run-id>/cfg/dnstt-cli/profiles.toml`
@@ -230,10 +229,10 @@ and follows the [stage design](../plan.md#run-design).
 
 ## Done when
 
-- The binary was built offline from the reviewed tree (cached toolchain, `GOPROXY=off`,
-  `-mod=readonly`), its `sha256` and the `go version` are recorded, and the client container
-  ran it with the temporary profile mounted read-only, with nothing installed and no image
-  pull.
+- The binary was built offline from the reviewed tree (the module's required toolchain,
+  `GOPROXY=off`, `-mod=readonly`), its `sha256` and the `go version` are recorded, and the
+  client container ran it with the temporary profile mounted read-only, with nothing
+  installed and no image pull.
 - `resolvers check` on the mixed profile named the dead resolver `FAILED` with its error and
   the working resolver `OK` with `rc` 0; on the dead-only profile every entry failed and the
   command exited 1 with `No resolver passed the check.`; the dead entry's time was the 10 s
@@ -259,8 +258,8 @@ The resolver-facing checks were accepted in one `real-3` run against the real se
 a temporary profile that carried only the domain and the public key: no exit credentials,
 no secret store, no listener. One disposable client container from the local
 `debian:trixie` image (`--pull=never`, default bridge, no published ports, nothing
-installed) ran the binary built offline from the reviewed tree with the cached toolchain;
-the profile was mounted read-only and deleted after the run.
+installed) ran the binary built offline from the reviewed tree with the module's required
+toolchain; the profile was mounted read-only and deleted after the run.
 
 **R7.** The mixed list named the dead resolver first as `FAILED (context deadline
 exceeded)` at the final 10 s handshake timeout and the working DoH entry as `OK (204 ms)`;

@@ -219,8 +219,8 @@ under `doc/runs/logs` with the four transport/side names.
 Deviations and run notes: `SSL_CERT_FILE=/cacert.pem` was set for the `compare` exec as well
 as the control fetch, because the image ships no CA store and both the HTTPS target probe
 and the DoH transport verify certificates; the step's command lists it only for the control
-fetch. The system Go is older than `go.mod` requires, so the cached `go1.26.2` toolchain was
-used offline, as in the synthetic run; `GOPROXY=off` and `-mod=readonly` held. The control
+fetch. The module's required toolchain was used offline, as in the synthetic run;
+`GOPROXY=off` and `-mod=readonly` held. The control
 fetch is the run's standard-library artifact, and the run scripts are mode 0600, so the
 resolver entries and the target stay out of the host's shell history; the target host name
 appears in the tool's own terminal lines, which stay in the ignored evidence. The two user

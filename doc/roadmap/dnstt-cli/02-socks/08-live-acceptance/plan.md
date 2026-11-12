@@ -147,9 +147,14 @@ Recorded limits: the source-address change proof is indirect (the image has no `
 the change was made inside the network namespace and the idle socket list was empty), the
 synthetic clean stop's SIGINT reached the `script` wrapper rather than the product (the
 product exited 0 and no process remained, but its own stop line is missing), and the host
-comparison is not literal because of other projects' Docker churn. The HTTP result does not
-replace the SOCKS5 acceptance, and the synthetic SOCKS5 result does not stand for the user's
-server, exit or network.
+comparison is not literal because of other projects' Docker churn. The synthetic SOCKS5 run
+used the local literal UDP resolver only; DoH and DoT were exercised through the HTTP exit,
+so the SOCKS5 exit over DoH and DoT is not claimed. The `network` resolver is covered by
+unit and injected-DNS tests; its Windows path was cross-built and test-compiled only, and no
+live `network` run was made (the live profiles used pins or a literal UDP entry). A system
+DNS on a loopback stub is not used by the reader, a recorded limitation; allowing it is a
+separate change. The HTTP result does not replace the SOCKS5 acceptance, and the synthetic
+SOCKS5 result does not stand for the user's server, exit or network.
 
 The final timeouts are keepalive 30 s, handshake 10 s and `degraded` 25 s. The `danted`
 question is answered by the measured one-write exchange and the `exit.one_write` setting,

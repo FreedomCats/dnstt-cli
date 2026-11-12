@@ -266,10 +266,9 @@ Deviations and run notes: the target page is `page.html` with the title and the 
 body, not `body.txt`, because the DOM needs a title; the client mounts only its own evidence
 directory, not the whole run directory, so the private key is not visible to it;
 `dnstt-server` was built from a copy of `core/server/main.go` with the package clause
-changed to main, because the vendored package is a library; the system Go is older than
-`go.mod` requires, so the cached 1.26.2 toolchain was used offline. The steps' build command
-for `dnstt-server` and `GOTOOLCHAIN=local` with the system Go do not produce the server
-binary; the run used the workaround above. No `dnstt-cli` defect was found: the 52.8 s
+changed to main, because the vendored package is a library; the module's required toolchain
+was used offline. The steps' build command for `dnstt-server` with `GOTOOLCHAIN=local` does
+not produce the server binary; the run used the workaround above. No `dnstt-cli` defect was found: the 52.8 s
 restart recovery is the keepalive path, recorded against the 30 s keepalive and 25 s
 degraded threshold rather than treated as a defect. The real-server checks R0–R10 and the
 Windows child W1 are other nodes and were not run; the one-write mode is not part of this
