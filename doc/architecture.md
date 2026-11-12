@@ -91,7 +91,6 @@ Every stream starts with a handshake to whatever the server hands it to:
   server hands the stream to the fixed HTTP proxy service; target names are resolved there.
 - **`ssh`** — one SSH connection inside one stream, `direct-tcpip` channels for
   connections, password or key authentication, the server host key pinned in the profile.
-  A second stage.
 
 The shell's own `socks` listener never passes app traffic to the exit as is: it parses the
 app's SOCKS5 request and opens the exit itself. So apps do not need the exit's password,
@@ -488,7 +487,8 @@ Idle ──▶ Dialing ──▶ Connected ◀──▶ Degraded
            │                                for longer than expected)
            └──── Reconnecting ◀── session died · network changed · resolver put aside
 
-Stopping ◀── Ctrl+C · exit refused the login · no resolver ever completed a handshake
+Stopping ◀── Ctrl+C · exit refused the login · the SSH host key did not match
+             · no resolver ever completed a handshake
              on the first connect (wrong domain or key, server down)
 ```
 
@@ -506,7 +506,10 @@ Stopping ◀── Ctrl+C · exit refused the login · no resolver ever complete
   `CONNECT` performs Basic authentication. A final HTTP 407 is a fatal login refusal and
   moves the supervisor to `Stopping` without resolver penalty or redial. Other HTTP
   connection refusals and protocol errors remain per-stream failures rather than fatal
-  login errors; actual tunnel-session failures follow normal recovery.
+  login errors; actual tunnel-session failures follow normal recovery. For `ssh`, `Check`
+  authenticates and opens one SSH connection; a pinned host key that does not match is final
+  (`Stopping`) with the message naming both fingerprints and is not retried, and a refused
+  authentication is final as well.
 - **Session end** — a session that died by itself counts against its resolver if it lived
   less than a minute (R5) and waits the next backoff delay; one that lived longer clears
   the backoff and is redialed at once. The same resolver is tried first.
@@ -657,9 +660,10 @@ From csqtt-cli: the menu has no logic of its own, it calls the same code as the 
   at once, without the connect item's resolver question. Without a terminal, no arguments
   prints the command list.
 - **No profile yet** — the wizard: paste a `slipnet://` link (hidden input: it holds the
-  exit password) or answer questions — profile name (Enter — `home`), tunnel domain, server
-  key, exit type (`socks5`, `http` or `ssh`), exit login and, for `socks5` and `http`, the
-  password (hidden, twice), and for `ssh` the authentication method: the password (hidden,
+  exit password or the private key) or answer questions — profile name (Enter — `home`),
+  tunnel domain, server key, exit type (`socks5`, `http` or `ssh`), exit login and, for
+  `socks5` and `http`, the password (hidden, twice), and for `ssh` the authentication method:
+  the password (hidden,
   twice), or the path of a private key, whose passphrase is asked (hidden) when the key needs
   one; then the pinned fingerprint (`SHA256:…`, a public value, asked plainly, not hidden),
   resolvers — the servers to connect through, one or several, entered by the user (Enter
