@@ -94,17 +94,18 @@ func runProfileShow(_ context.Context, e *env, args []string) error {
 	var showFull bool
 	var name string
 
-	// Simple flag parsing: -full comes before the name.
-	for i, arg := range args {
-		if arg == "-full" {
+	// Simple flag parsing: -full comes before or after the name, and any other argument
+	// that starts with "-" is an unknown flag wherever it stands.
+	for _, arg := range args {
+		switch {
+		case arg == "-full":
 			showFull = true
-		} else if !strings.HasPrefix(arg, "-") {
-			if name != "" {
-				return usagef("extra argument: profile show takes one profile name")
-			}
-			name = arg
-		} else if i > 0 {
+		case strings.HasPrefix(arg, "-"):
 			return usagef("unknown flag %q", arg)
+		case name != "":
+			return usagef("extra argument: profile show takes one profile name")
+		default:
+			name = arg
 		}
 	}
 

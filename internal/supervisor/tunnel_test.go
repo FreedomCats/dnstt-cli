@@ -813,6 +813,43 @@ func TestDrain(t *testing.T) {
 	}
 }
 
+// SetDrain is the datapath's stop hook (the socks relay drain): a stop calls it while the
+// session is still up, and the second Ctrl+C cuts the wait short.
+func TestSetDrainAbort(t *testing.T) {
+	var sessionOpen atomic.Bool
+	var h *harness
+	drained := make(chan time.Duration, 1)
+	h = newHarness(t, []string{r1}, func(o *Options) { o.DrainTimeout = 500 * time.Millisecond })
+	h.tun.SetDrain(func(ctx context.Context) {
+		sessionOpen.Store(!h.session(0).closed.Load())
+		start := time.Now()
+		<-ctx.Done()
+		drained <- time.Since(start)
+	})
+	ctx, abort := WithAbort(context.Background())
+	h.run(ctx)
+	h.waitState(StateConnected, 1)
+	h.cancel()
+	h.waitState(StateStopping, 1)
+	if !abort() {
+		t.Fatal("nothing to abort while the drain runs")
+	}
+	var d time.Duration
+	select {
+	case d = <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stop did not call the drain")
+	}
+	<-h.result
+	h.result <- nil
+	if !sessionOpen.Load() {
+		t.Error("the session was closed before the drain")
+	}
+	if d >= 500*time.Millisecond {
+		t.Errorf("abort did not cut the drain short: %v", d)
+	}
+}
+
 func TestRunTwice(t *testing.T) {
 	h := newHarness(t, []string{r1}, nil)
 	h.run(context.Background())

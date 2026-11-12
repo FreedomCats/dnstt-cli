@@ -596,6 +596,10 @@ func TestConnectWithInProcessServer(t *testing.T) {
 
 	t.Logf("Successfully passed data through the tunnel!")
 
+	// Close the relay before the stop: the first Ctrl+C waits for open connections, and
+	// this test is about the data path, not the drain.
+	conn.Close()
+
 	// Cancel the context to stop the tunnel.
 	cancel()
 

@@ -166,10 +166,11 @@ type Tunnel struct {
 	mu         sync.Mutex
 	state      State
 	resolver   string
-	datapath   Datapath      // set once before Run; nil — the datapath needs no session part
-	killSwitch func() bool   // set once before Run; nil — no kill-switch
-	live       *live         // the session that is up; nil between sessions
-	ready      chan struct{} // closed when the next session is up
+	datapath   Datapath              // set once before Run; nil — the datapath needs no session part
+	drainFn    func(context.Context) // set once before Run; nil — Options.Drain
+	killSwitch func() bool           // set once before Run; nil — no kill-switch
+	live       *live                 // the session that is up; nil between sessions
+	ready      chan struct{}         // closed when the next session is up
 	since      time.Time
 	handshake  time.Duration
 	fatalErr   error              // the first fatal exit failure; protected by mu
@@ -231,6 +232,25 @@ func (t *Tunnel) sessionDatapath() Datapath {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.datapath
+}
+
+// SetDrain gives Run the hook that stops the datapath and waits for its open connections
+// (Options.Drain). It is called once before Run, like SetDatapath: the socks datapath is
+// built after the tunnel, and its listener is already up by then.
+func (t *Tunnel) SetDrain(drain func(context.Context)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.drainFn = drain
+}
+
+// sessionDrain is the stop hook of Run: SetDrain's value, or Options.Drain, read under mu.
+func (t *Tunnel) sessionDrain() func(context.Context) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.drainFn != nil {
+		return t.drainFn
+	}
+	return t.opts.Drain
 }
 
 // SetKillSwitch gives Run the state of the kill-switch: true while system traffic is
@@ -786,10 +806,11 @@ func (t *Tunnel) watchRestart(ctx context.Context) (context.Context, func() (err
 	}
 }
 
-// drain lets the datapath finish the open connections (Options.Drain) until
+// drain lets the datapath finish the open connections (Options.Drain, or SetDrain) until
 // DrainTimeout or the second Ctrl+C.
 func (t *Tunnel) drain(aborted <-chan struct{}) {
-	if t.opts.Drain == nil {
+	drain := t.sessionDrain()
+	if drain == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), t.opts.DrainTimeout)
@@ -801,7 +822,7 @@ func (t *Tunnel) drain(aborted <-chan struct{}) {
 		case <-ctx.Done():
 		}
 	}()
-	t.opts.Drain(ctx)
+	drain(ctx)
 }
 
 // stop commits the stopping cause before draining. FatalExit and cancellation are ordered

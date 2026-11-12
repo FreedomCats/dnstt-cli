@@ -107,17 +107,17 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 		control = guard.Control
 	}
 
-	// Build the tunnel.
-	transitions := make(chan supervisor.Transition, 100)
+	// Build the tunnel. The status line exists only on a terminal, and only it reads the
+	// transitions: with redirected output no callback is installed, so nobody can stall
+	// the supervisor by not consuming them.
+	transitions, onTransition := statusTransitions(e.stdout)
 	tunnel, err := app.BuildTunnel(app.TunnelOptions{
-		Profile:     &p,
-		ProfileName: profileName,
-		Logf:        logf,
-		Notice:      notice,
-		Control:     control,
-		OnTransition: func(tr supervisor.Transition) {
-			transitions <- tr
-		},
+		Profile:      &p,
+		ProfileName:  profileName,
+		Logf:         logf,
+		Notice:       notice,
+		Control:      control,
+		OnTransition: onTransition,
 	})
 	if err != nil {
 		return err
@@ -249,7 +249,7 @@ func runConnect(ctx context.Context, e *env, args []string) error {
 
 	// Start the status line if output is a terminal.
 	var status *statusLine
-	if isTerminal(e.stdout) {
+	if transitions != nil {
 		status = newStatusLine(e.stdout, profileName)
 		defer status.stop()
 		go status.run(transitions, tunnel.Supervisor)
@@ -354,6 +354,30 @@ func isTerminal(w io.Writer) bool {
 		return false
 	}
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// statusTransitions decides whether the run has a status line and returns the channel it
+// reads and the callback for the supervisor. Only a terminal has a status line; without
+// one nothing reads the transitions, so no callback is installed and a run under systemd
+// or with its output redirected cannot hold the supervisor.
+func statusTransitions(w io.Writer) (chan supervisor.Transition, func(supervisor.Transition)) {
+	if !isTerminal(w) {
+		return nil, nil
+	}
+	transitions := make(chan supervisor.Transition, 100)
+	return transitions, notifyTransitions(transitions)
+}
+
+// notifyTransitions wakes the status line up. It never blocks the supervisor: the status
+// line redraws on its ticker as well, so a transition dropped on a full buffer costs a
+// redraw, not the state.
+func notifyTransitions(transitions chan<- supervisor.Transition) func(supervisor.Transition) {
+	return func(tr supervisor.Transition) {
+		select {
+		case transitions <- tr:
+		default:
+		}
+	}
 }
 
 // statusLine prints the tunnel status at the bottom of the terminal.

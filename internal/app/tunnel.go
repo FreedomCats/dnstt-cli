@@ -109,6 +109,9 @@ func buildTunnel(opts TunnelOptions, getSecret func(string) (string, error)) (*T
 	switch exitType {
 	case "socks5":
 		if prof.Exit.PasswordRef != "" {
+			if user == "" {
+				return nil, errors.New("SOCKS5 exit: password_ref requires a user")
+			}
 			password, err = getSecret(prof.Exit.PasswordRef)
 			if err != nil {
 				return nil, fmt.Errorf("exit password: %w", err)
@@ -277,6 +280,10 @@ func BuildDatapath(tun *Tunnel, prof *config.Profile, logf func(format string, a
 		if err != nil {
 			return nil, fmt.Errorf("socks datapath: %w", err)
 		}
+		// A stop drains the datapath before the session is closed: the relay of an open
+		// connection ends while the tunnel is still up (architecture.md §08). SetDrain is
+		// called before Run, which happens after this function returns.
+		tun.Supervisor.SetDrain(func(ctx context.Context) { _ = socks.Drain(ctx) })
 		return socks, nil
 	case "tun":
 		dns, err := parseTunDNS(prof.TunDNS)

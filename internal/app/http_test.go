@@ -124,6 +124,29 @@ func TestBuildOtherExitContracts(t *testing.T) {
 	}
 }
 
+// A password without a user is a profile error, not a retryable login refusal: BuildTunnel
+// refuses it before the supervisor starts looping with only "reconnecting..." on screen.
+func TestBuildSOCKS5PasswordNeedsUser(t *testing.T) {
+	p := testProfile(config.Exit{Type: "socks5", PasswordRef: "file:synthetic-id"})
+	if _, err := buildTunnel(TunnelOptions{Profile: p}, func(string) (string, error) {
+		t.Error("the secret store was opened without a user")
+		return "", nil
+	}); err == nil || err.Error() != "SOCKS5 exit: password_ref requires a user" {
+		t.Fatalf("BuildTunnel = %v, want the password_ref refusal", err)
+	}
+
+	p.Exit.User = "synthetic-user"
+	tun, err := buildTunnel(TunnelOptions{Profile: p}, func(string) (string, error) {
+		return "synthetic-password", nil
+	})
+	if err != nil {
+		t.Fatalf("BuildTunnel with a user = %v", err)
+	}
+	if _, ok := tun.Exit.(*exit.SOCKS5); !ok {
+		t.Fatalf("the socks5 profile gave %T, want *exit.SOCKS5", tun.Exit)
+	}
+}
+
 func TestHTTPSecretStoreErrorsAreSafe(t *testing.T) {
 	t.Setenv("SUDO_USER", "")
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")

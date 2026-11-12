@@ -71,6 +71,12 @@ type Socks struct {
 	conns   map[net.Conn]net.Conn // the program's side of each connection, to its stream
 	down    bool                  // no more accepted connections
 	closing bool                  // Close is forcing all connections to end
+	// draining is set by Drain: accepted connections may no longer become relays.
+	draining bool
+	// relays counts established connections; Drain waits for them. A pending handshake
+	// is Shutdown's business and must not delay a fatal stop.
+	relays    int
+	relayDone chan struct{} // closed when relays drops to zero; nil while none
 }
 
 // NewSocks opens the listener. A busy port or an address that is not loopback is an error
@@ -133,13 +139,7 @@ func (s *Socks) Close() error {
 // until ctx ends. It then calls Close, including for established relays. Close may be
 // called concurrently to force shutdown at once. The caller must bound ctx.
 func (s *Socks) Shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	s.down = true
-	s.mu.Unlock()
-	err := s.ln.Close()
-	if errors.Is(err, net.ErrClosed) {
-		err = nil
-	}
+	err := s.stopAccepting()
 	finished := make(chan struct{})
 	go func() { s.handshakes.Wait(); close(finished) }()
 	select {
@@ -152,6 +152,48 @@ func (s *Socks) Shutdown(ctx context.Context) error {
 		err = closeErr
 	}
 	<-finished
+	return err
+}
+
+// Drain stops accepting connections and waits until the established ones have finished,
+// or ctx ends: the stop of a run lets the relay of an open connection end while the
+// session is still up (architecture.md §08). A connection that is still handshaking is
+// not waited for — Shutdown finishes those after Run, so a fatal stop is not delayed.
+// Repeated and concurrent calls are harmless, and after Close it returns at once. The
+// caller bounds ctx.
+func (s *Socks) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	s.down = true
+	s.draining = true
+	done := s.relayDone
+	s.mu.Unlock()
+	err := s.closeListener()
+	if done == nil {
+		return err
+	}
+	select {
+	case <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// stopAccepting refuses new connections and closes the listener. Repeated calls and calls
+// after Close are harmless.
+func (s *Socks) stopAccepting() error {
+	s.mu.Lock()
+	s.down = true
+	s.mu.Unlock()
+	return s.closeListener()
+}
+
+// closeListener closes the listener; an already closed one is not an error.
+func (s *Socks) closeListener() error {
+	err := s.ln.Close()
+	if errors.Is(err, net.ErrClosed) {
+		err = nil
+	}
 	return err
 }
 
@@ -303,28 +345,45 @@ func relay(a, b net.Conn) {
 	<-done
 }
 
-// track adds the pair of sockets of one connection to the ones Close closes. c is the key:
-// the local connection is unique. false — the datapath is closing, and the sockets are
-// closed here.
+// track adds the pair of sockets of one connection to the ones Close closes and counts it
+// among the relays Drain waits for. c is the key: the local connection is unique. false —
+// the datapath is closing or draining, and the sockets are closed here.
 func (s *Socks) track(c, peer net.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closing {
+	if s.closing || s.draining {
 		c.Close()
 		peer.Close()
 		return false
 	}
+	if s.relays == 0 {
+		s.relayDone = make(chan struct{})
+	}
+	s.relays++
 	s.conns[c] = peer
 	return true
 }
 
-// untrack closes and forgets the sockets of a connection whose goroutine has ended.
+// untrack closes and forgets the sockets of a connection whose goroutine has ended. The
+// second deferred call of a relay finds its entry already gone and does nothing.
 func (s *Socks) untrack(c, peer net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.Close()
 	peer.Close()
+	stored, ok := s.conns[c]
+	if !ok {
+		return
+	}
 	delete(s.conns, c)
+	if stored == c {
+		return // a handshake that never became a relay
+	}
+	s.relays--
+	if s.relays == 0 {
+		close(s.relayDone)
+		s.relayDone = nil
+	}
 }
 
 // closeConns closes the sockets of every connection in progress. A deadline in the past
