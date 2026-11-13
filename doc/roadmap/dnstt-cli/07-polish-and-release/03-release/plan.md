@@ -1,6 +1,7 @@
 ---
 kind: task
-status: todo
+status: done
+detailed: true
 depends: [02-ci-green]
 ---
 
@@ -93,3 +94,64 @@ job of `.github/workflows/release.yml:103-134`; publishing the draft is done her
   in CI only, the SSH exit against a synthetic `sshd`, the real server through its HTTP CONNECT
   exit — and carry no date, name, environment, address or key.
 - The Outcome names the tag, the commit, the run number and the assets with their checksums.
+
+## Outcome
+
+`v0.9.0` is published. The tag is lightweight and sits on the commit whose `linux` and `windows`
+runs were green; the `release` workflow built the archives from that commit and the draft it made
+was published here.
+
+- Tag `v0.9.0` → `610ffd1502d7f7eafd3e7a93ceed1ab3c86da5ef`: `git cat-file -t v0.9.0` prints
+  `commit`, `git rev-parse v0.9.0` was `HEAD` and `origin/main` at the time of tagging. It was
+  pushed alone (`git push origin v0.9.0`); nothing was moved or deleted.
+- `release` run
+  [#43342483073](https://github.com/FreedomCats/dnstt-cli/actions/runs/43342483073) on the tag:
+  `test`, `test-linux`, `build` and `release` green on the first attempt, nothing had to be
+  fixed.
+- Published at <https://github.com/FreedomCats/dnstt-cli/releases/tag/v0.9.0>: not a draft, three
+  assets.
+- Nothing beyond: no branch push, no tag deletion or move, no change to the repository's
+  settings, description or topics, no edit of another release, no asset uploaded by hand.
+
+The assets were checked as downloaded from the release, not from `dist/`:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `dnstt-cli_v0.9.0_linux_amd64.tar.gz` | `d27d4a7b77723093d2d5bda0bd2870508daa7c03d4b0121154e66fa251540a00` |
+| `dnstt-cli_v0.9.0_windows_amd64.zip` | `aa6c8394f124cac594a834d87fe8247a81020932aae6a4dcf2e0323c97e4b5cb` |
+
+- `sha256sum -c SHA256SUMS.txt` passes on both, and so does
+  `go run ./scripts/distcheck -dir <the download directory>`; `SHA256SUMS.txt` lists exactly the
+  two archives. The digests match the ones the release API reports for the uploaded assets.
+- The tar.gz holds `dnstt-cli` (0755), `README.md`, `LICENSE`, `COPYING`,
+  `THIRD_PARTY_NOTICES.txt` and `dnstt-cli.example.toml`; the zip the same documents plus
+  `dnstt-cli.exe`, `wintun.dll` and `wintun-LICENSE.txt`. Every entry is inside the directory
+  named after the archive, and there is nothing extra.
+- The extracted Linux binary prints `dnstt-cli v0.9.0 (610ffd1)` for `version`; `go version -m`
+  on both binaries reports module version `v0.9.0`, the tagged revision and an unmodified build.
+
+The notes are the `Download` block from `scripts/releasenotes` and the generated changelog, with a
+`## Scope of this release` section above them: Linux accepted live with `socks` and `tun` and all
+three exits; Windows built and tested in CI only, never run by hand, and without `tun`; the SSH
+exit accepted against an `sshd` in a disposable container; the real server exercised through its
+HTTP CONNECT exit; macOS in proxy mode only; and why the version is `0.9.0`. The page was read
+after publishing: every link answers with `200`, and the body carries no date of work, name,
+environment, address, server domain or key. The only date on the page is GitHub's own "released
+this" line.
+
+What was learned on the way:
+
+- A draft release made by the `release` job has a placeholder URL (`/releases/tag/untagged-…`);
+  it becomes `/releases/tag/v0.9.0` when the draft is published.
+- `gh release download` outside a git repository needs `-R <owner>/<repo>`.
+- The workflow needed no fix: `THIRD_PARTY_NOTICES.txt` was current, the pinned `wintun` archive
+  was fetched, `distcheck` and `releasenotes` passed, and the cross-built Windows archive went
+  through the same `distcheck` as the Linux one.
+
+Left for later, and why: a manual run on Windows and the Windows `tun` mode — the stage that will
+use the `wintun.dll` this archive already carries. The scope section of the notes says so instead
+of claiming a Windows acceptance the project does not have, and that is why the version is
+`0.9.0` rather than `1.0`.
+
+This Outcome is documentation only and is committed to `main` after publishing; the tag stays on
+`610ffd1`.
