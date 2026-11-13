@@ -1,6 +1,6 @@
 ---
 kind: root
-status: in-progress
+status: blocked
 lang: en
 source: doc/architecture.md
 branch: main
@@ -17,6 +17,14 @@ vendored and built in, the shell is carried over from csqtt-cli.
 Why it is built this way — [`doc/architecture.md`](../../architecture.md). That document
 holds the decisions (R1–R9), the interfaces and the analysis behind them; this roadmap
 holds what is done and in which order.
+
+**State: blocked on the Windows machine.** Every stage is done except
+[the Windows VPN](04-tun-windows/plan.md): it needs a Windows machine for Wintun, WFP and
+the live run, and the criteria below that name Windows cannot be accepted without one. The
+rest is accepted: the menu and the wizard, the `slipnet://` import, the SSH exit, elevation,
+the MIT license and the release archives, with Windows cross-built and test-compiled only.
+The user chose to keep the map open rather than close it with the Windows items `not seen`,
+so work resumes when a machine is available.
 
 ## Done when
 
