@@ -1,6 +1,6 @@
 ---
 kind: root
-status: in-progress
+status: blocked
 lang: en
 source: doc/architecture.md
 branch: main
@@ -18,12 +18,13 @@ Why it is built this way — [`doc/architecture.md`](../../architecture.md). Tha
 holds the decisions (R1–R9), the interfaces and the analysis behind them; this roadmap
 holds what is done and in which order.
 
-**State: finishing.** Every stage is accepted except
+**State: blocked on the Windows machine.** Every stage is accepted except
 [the Windows VPN](04-tun-windows/plan.md), which is `blocked` on a Windows machine for
 Wintun, WFP and the live run; the criteria below that name Windows cannot be accepted
-without one. A last stage, [finishing](07-polish-and-release/plan.md), closes the small
-debts recorded at the acceptances, gets the CI green on both platforms and publishes the
-first release, `v0.9.0`; the map then returns to `blocked` until a machine is available.
+without one. The first release, `v0.9.0`, is published from CI: Linux is live-accepted,
+Windows is built and its tests run on a Windows runner, but nothing was run by hand on
+Windows and `tun` there waits for that stage. The map stays open and resumes when a machine
+is available.
 
 ## Done when
 

@@ -37,8 +37,9 @@ The same actions are commands:
     dnstt-cli version
     dnstt-cli help [command]
 
-`profile set` is still a placeholder: the menu and the wizard (`profile add`) are the ways
-to change a profile.
+`profile set` is still a placeholder: the menu changes the resolvers, the exit secret, the
+pinned fingerprint and the domain or key. To change the exit type, the login, the mode or
+the datapath, delete the profile (`profile rm`) and create it again (`profile add`).
 
 ## How it differs from dnstt's own client
 
@@ -101,12 +102,13 @@ the real address over UDP. Use `tun` when that matters.
 | System | `socks` | `tun` | State |
 |---|---|---|---|
 | Linux, x86-64 | yes | yes | checked live |
-| Windows, x86-64 | yes | not yet | built and tested in CI, not run |
+| Windows, x86-64 | yes | not yet | built and tested in CI; not run by hand |
 | macOS | yes | no | the code builds; not checked live, no archive |
 
 The SSH exit was exercised through a real tunnel against an `sshd` in a disposable
 container; the real server was exercised through its HTTP `CONNECT` exit. The Windows build
-is cross-compiled on Linux and its tests are compiled, but nothing was run on Windows.
+is cross-compiled on Linux and its test suite runs on a Windows runner in CI, but the
+program was never run by hand on Windows.
 
 `tun` on Windows is the stage
 [`04-tun-windows`](doc/roadmap/dnstt-cli/04-tun-windows/plan.md), which is blocked for now:
