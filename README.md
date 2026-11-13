@@ -40,6 +40,24 @@ The same actions are commands:
 `profile set` is still a placeholder: the menu and the wizard (`profile add`) are the ways
 to change a profile.
 
+## How it differs from dnstt's own client
+
+The tunnel is the same: the dnstt core is vendored in `core/`, the protocol is Noise over
+KCP in DNS queries, and the client works with a stock `dnstt-server`. What differs is the
+shell around the tunnel.
+
+| | `dnstt-client` (upstream) | `dnstt-cli` |
+|---|---|---|
+| Local side | one TCP port forwarded to one fixed address, like `ssh -L` | a local SOCKS5 proxy, or `tun` with a TCP/IP stack, routes and system DNS |
+| What the server reaches | one fixed TCP address | SOCKS5 with an optional login, HTTP `CONNECT` with Basic authentication, or SSH `direct-tcpip` with a password or a key and a pinned host key |
+| Resolvers | one per run: `-doh`, `-dot` or `-udp` | a list per profile over DoH, DoT, plain TCP and UDP, with failover and `resolvers check` |
+| Reconnection | none: a dead session needs a restart | a supervisor that redials with backoff, rotates resolvers and follows a network change in `tun` |
+| Settings | command-line flags | `profiles.toml`, a `slipnet://` import, the wizard and the menu; secrets in the system store |
+| Leak protection | none | `tun`: kill-switch, DNS protection, IPv6 block, `-allow-leak` |
+| Output | logs | the same logs, plus a status line while connected |
+
+Plain UDP is a testing mode in both, as upstream's README says: it does not hide the tunnel.
+
 `connect` runs until it is stopped: the first Ctrl+C stops cleanly, the second does not
 wait for open connections. `-datapath socks` is a local SOCKS5 proxy (`127.0.0.1:1080`
 unless the profile says otherwise); `-datapath tun` sends all system traffic through the
