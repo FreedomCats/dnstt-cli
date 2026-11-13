@@ -1,6 +1,6 @@
 ---
 kind: task
-status: in-progress
+status: done
 detailed: true
 depends: [01-small-debts]
 ---
@@ -72,3 +72,37 @@ this stage; nothing beyond it is.
   was created and no repository setting was changed.
 - The Outcome names the commits, the run numbers and every fix, flake or environment problem
   with its cause or its recorded reason.
+
+## Outcome
+
+`main` is published and both workflows are green on the published tree. Nothing had to be
+fixed: the tree the debts left behind passed the first run.
+
+- Pushed `65b5149..e4f8114`, 23 commits: the 22 that were ahead of `origin/main` and this
+  node's plan commit, `e4f8114` (`Start the CI green task`). Every commit is by the project's
+  author with a midnight-UTC date and no task key.
+- The range was read before it was published: `git diff --check` clean, and no home or profile
+  path, machine or OS detail, date of work in prose, non-example domain, IP literal outside the
+  documentation ranges, resolver of the developer's own, server domain or public key, exit
+  credential or key material. Cloudflare's public DNS appears as the shipped `tun_dns` default,
+  as a preset and as a live-test target; it is public infrastructure that names no ISP or
+  region, and it predates this node.
+- `linux` run [#43341165222](https://github.com/FreedomCats/dnstt-cli/actions/runs/43341165222)
+  on `e4f8114`: `test`, `netns` and `core` all green.
+- `windows` run [#43341165115](https://github.com/FreedomCats/dnstt-cli/actions/runs/43341165115)
+  on `e4f8114`: `test` and `core` green.
+- The IPv6 experiment of the previous node is answered by that run: the `test` job passed with
+  `DNSTT_CLI_TEST_IPV6=1`, and under the variable `TestApplyReadsV6Only` fails instead of
+  skipping when the kernel has no IPv6 socket or the socket comes out IPv4. A green job
+  therefore means the runner has IPv6 and both subtests ran. The line stays in
+  `.github/workflows/linux.yml`.
+- `netns` reported no skip: the step fails on any `--- SKIP` and on a log without `--- PASS`, and
+  it passed with both test binaries run under `-test.v` in the container with `NET_ADMIN`,
+  `/dev/net/tun` and IPv6 switched on. `vendorcore -check` passed in `core` on both platforms
+  against the mirror at the commit of `core/CORE_VERSION`.
+- No fix, no flake and no environment problem was met. `release.yml` did not start: the push was
+  `main` only, it listens to `v*` tags and `release/**`, and no tag was created. No repository
+  setting was changed.
+- After the runs the working tree was clean and `HEAD` equalled `origin/main`. The commit that
+  carries this Outcome is documentation only; the workflows run on it as well, on the same code
+  tree.
