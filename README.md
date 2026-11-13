@@ -19,6 +19,14 @@ password or, for `ssh`, the authentication method with the password or the path 
 private key and its passphrase, the pinned fingerprint of the SSH server, resolvers, and
 the mode: all traffic (`tun`) or only the programs with a proxy (`socks`).
 
+The exit behind the dnstt server is one of three:
+
+- `socks5` — RFC 1928 with an optional login; the main case.
+- `http` — HTTP/1.1 `CONNECT` with Basic authentication.
+- `ssh` — one SSH connection inside the tunnel, a `direct-tcpip` channel per application
+  connection, password or private-key authentication, and the server's host key pinned by
+  fingerprint in the profile. The server's `sshd` must allow TCP forwarding.
+
 The same actions are commands:
 
     dnstt-cli connect [profile]     connect to the dnstt server
@@ -28,6 +36,9 @@ The same actions are commands:
     dnstt-cli resolvers check [profile]
     dnstt-cli version
     dnstt-cli help [command]
+
+`profile set` is still a placeholder: the menu and the wizard (`profile add`) are the ways
+to change a profile.
 
 `connect` runs until it is stopped: the first Ctrl+C stops cleanly, the second does not
 wait for open connections. `-datapath socks` is a local SOCKS5 proxy (`127.0.0.1:1080`
@@ -72,8 +83,12 @@ the real address over UDP. Use `tun` when that matters.
 | System | `socks` | `tun` | State |
 |---|---|---|---|
 | Linux, x86-64 | yes | yes | checked live |
-| Windows, x86-64 | yes | not yet | built and tested in CI |
+| Windows, x86-64 | yes | not yet | built and tested in CI, not run |
 | macOS | yes | no | the code builds; not checked live, no archive |
+
+The SSH exit was exercised through a real tunnel against an `sshd` in a disposable
+container; the real server was exercised through its HTTP `CONNECT` exit. The Windows build
+is cross-compiled on Linux and its tests are compiled, but nothing was run on Windows.
 
 `tun` on Windows is the stage
 [`04-tun-windows`](doc/roadmap/dnstt-cli/04-tun-windows/plan.md), which is blocked for now:
@@ -89,6 +104,8 @@ Each release has two archives:
 
     dnstt-cli_<version>_linux_amd64.tar.gz
     dnstt-cli_<version>_windows_amd64.zip
+
+Download them from the [releases page](https://github.com/FreedomCats/dnstt-cli/releases).
 
 Both hold the binary (`dnstt-cli`, `dnstt-cli.exe`), `README.md`, `LICENSE`, `COPYING` (the
 license of the dnstt core), `THIRD_PARTY_NOTICES.txt` and `dnstt-cli.example.toml`. The
