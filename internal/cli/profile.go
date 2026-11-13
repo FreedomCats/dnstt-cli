@@ -20,7 +20,7 @@ func profileCommand() *command {
 
 Subcommands:
   add [name]      add a new profile with the interactive wizard
-  set <name>      edit an existing profile (interactive)
+  set <name>      change a profile in the menu (not interactive yet); 'profile add' creates a new one
   import          import a profile from a slipnet:// link
   show <name>     show a profile
   rm <name>       remove a profile and its stored exit password or key
@@ -347,15 +347,8 @@ func runProfileSet(_ context.Context, e *env, args []string) error {
 		return fmt.Errorf("profile %q not found; use 'profile add' to create it", name)
 	}
 
-	fmt.Fprintf(e.stdout, "Editing profile %q. This command is not yet interactive.\n", name)
-	fmt.Fprintf(e.stdout, "Edit the file directly: %s\n", mustPath())
+	fmt.Fprintf(e.stdout, "profile set is not interactive yet. Change profile %q in the menu "+
+		"(the profile items, \"another profile\" among them), or add a new profile with "+
+		"'profile add', which asks every field.\n", name)
 	return nil
-}
-
-func mustPath() string {
-	p, err := config.Path()
-	if err != nil {
-		return "<config path>"
-	}
-	return p
 }

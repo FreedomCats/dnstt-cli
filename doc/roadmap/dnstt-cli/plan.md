@@ -1,6 +1,6 @@
 ---
 kind: root
-status: blocked
+status: in-progress
 lang: en
 source: doc/architecture.md
 branch: main
@@ -18,13 +18,12 @@ Why it is built this way — [`doc/architecture.md`](../../architecture.md). Tha
 holds the decisions (R1–R9), the interfaces and the analysis behind them; this roadmap
 holds what is done and in which order.
 
-**State: blocked on the Windows machine.** Every stage is done except
-[the Windows VPN](04-tun-windows/plan.md): it needs a Windows machine for Wintun, WFP and
-the live run, and the criteria below that name Windows cannot be accepted without one. The
-rest is accepted: the menu and the wizard, the `slipnet://` import, the SSH exit, elevation,
-the MIT license and the release archives, with Windows cross-built and test-compiled only.
-The user chose to keep the map open rather than close it with the Windows items `not seen`,
-so work resumes when a machine is available.
+**State: finishing.** Every stage is accepted except
+[the Windows VPN](04-tun-windows/plan.md), which is `blocked` on a Windows machine for
+Wintun, WFP and the live run; the criteria below that name Windows cannot be accepted
+without one. A last stage, [finishing](07-polish-and-release/plan.md), closes the small
+debts recorded at the acceptances, gets the CI green on both platforms and publishes the
+first release, `v0.9.0`; the map then returns to `blocked` until a machine is available.
 
 ## Done when
 
@@ -53,6 +52,8 @@ so work resumes when a machine is available.
 5. [Interactive mode and releases](05-menu-and-release/plan.md) — menu, wizard,
    `slipnet://` import, release archives.
 6. [SSH exit](06-ssh-exit/plan.md) — `direct-tcpip`, password and key, pinned host key.
+7. [Finishing](07-polish-and-release/plan.md) — the small debts, CI green on both platforms
+   and the first release, `v0.9.0`.
 
 The old stage letters (`E0`–`E5`, task letters `F`, `S`) stay in commit messages and in
 the architecture, and the nodes here list them, so history is readable. The detailed

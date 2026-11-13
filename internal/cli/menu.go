@@ -349,8 +349,9 @@ func (m *menu) connectItem(ctx context.Context, e *env, abort <-chan struct{}) e
 }
 
 // anotherProfileItem lists the profiles and makes the chosen one the default. An empty
-// answer cancels; an unknown name asks again. A failed save leaves the old default, and the
-// next iteration reloads the file.
+// answer and 0 cancel — 0 leaves the menu everywhere else — unless a profile is literally
+// named "0"; an unknown name asks again. A failed save leaves the old default, and the next
+// iteration reloads the file.
 func (m *menu) anotherProfileItem(ctx context.Context, e *env, _ <-chan struct{}) error {
 	if err := m.list(ctx, e, nil); err != nil {
 		return err
@@ -366,7 +367,7 @@ func (m *menu) anotherProfileItem(ctx context.Context, e *env, _ <-chan struct{}
 			return readError(ctx, err)
 		}
 		name := strings.TrimSpace(answer)
-		if name == "" {
+		if name == "" || (name == "0" && profiles.Profile[name] == nil) {
 			return nil
 		}
 		if profiles.Profile[name] == nil {
@@ -379,7 +380,7 @@ func (m *menu) anotherProfileItem(ctx context.Context, e *env, _ <-chan struct{}
 }
 
 // deleteProfileItem asks before anything else, then removes the current profile and its
-// exit password through the body of `profile rm`: the secret goes first, and the last
+// exit password or key through the body of `profile rm`: the secret goes first, and the last
 // profile removes profiles.toml.
 func (m *menu) deleteProfileItem(ctx context.Context, e *env, _ <-chan struct{}) error {
 	profiles, err := config.LoadProfiles()
@@ -391,7 +392,11 @@ func (m *menu) deleteProfileItem(ctx context.Context, e *env, _ <-chan struct{})
 		return nil
 	}
 
-	answer, err := m.ask.Ask(ctx, fmt.Sprintf("Delete profile %q and its exit password? (y/N): ", name))
+	word := "exit password"
+	if prof := profiles.Profile[name]; prof != nil && prof.Exit.KeyRef != "" {
+		word = "exit key"
+	}
+	answer, err := m.ask.Ask(ctx, fmt.Sprintf("Delete profile %q and its %s? (y/N): ", name, word))
 	if err != nil {
 		return readError(ctx, err)
 	}

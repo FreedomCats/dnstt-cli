@@ -281,6 +281,30 @@ func insertAnswers(answers []scriptedAnswer, at int, extra ...scriptedAnswer) []
 	return out
 }
 
+// The store names of the exit secret are built in one place: the wizard's name and the
+// menu's fresh name share the suffix of the shape.
+func TestExitSecretNames(t *testing.T) {
+	password := exitSecret{password: wizardTestPassword}
+	key := exitSecret{key: "synthetic-key-material"}
+	if got := password.secretName("home"); got != "home.password" {
+		t.Errorf("password secret name = %q, want home.password", got)
+	}
+	if got := key.secretName("home"); got != "home.key" {
+		t.Errorf("key secret name = %q, want home.key", got)
+	}
+
+	if got, err := newSecretName("home", password.secretSuffix(), ""); err != nil || got != "home.password" {
+		t.Errorf("name without an old reference = %q, %v; want home.password", got, err)
+	}
+	fresh, err := newSecretName("home", key.secretSuffix(), "file:home.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefix := "home.key-"; !strings.HasPrefix(fresh, prefix) || len(fresh) != len(prefix)+16 {
+		t.Errorf("fresh key name = %q, want home.key-<16 hex digits>", fresh)
+	}
+}
+
 func TestWizardSocks5NoAuth(t *testing.T) {
 	answers := []scriptedAnswer{
 		{value: "home"},

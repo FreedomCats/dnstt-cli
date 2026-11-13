@@ -244,6 +244,42 @@ func TestProfileAddUsageErrors(t *testing.T) {
 	}
 }
 
+// `profile set` is not an editor yet: it names what edits a profile instead of sending the
+// person to the file, and it prints no path of it.
+func TestProfileSetIsNotInteractive(t *testing.T) {
+	path := isolatedConnectConfig(t)
+	if err := config.SaveProfilesTo(path, &config.Profiles{
+		DefaultProfile: "home",
+		Profile: map[string]*config.Profile{"home": {
+			Domain: "t.example.com", Pubkey: wizardTestPubkey,
+			Resolvers: []string{"network"}, Exit: config.Exit{Type: "socks5"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLIInput(t, "", "profile", "set", "home")
+	if code != exitOK {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitOK, stderr)
+	}
+	for _, want := range []string{"not interactive", "menu", "profile add"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout does not name %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "Edit the file directly") || strings.Contains(stdout, path) {
+		t.Fatalf("stdout still sends the person to the file:\n%s", stdout)
+	}
+
+	code, _, stderr = runCLIInput(t, "", "profile", "set", "missing")
+	if code != exitError {
+		t.Fatalf("exit code %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "not found") {
+		t.Fatalf("stderr does not say the profile is missing:\n%s", stderr)
+	}
+}
+
 func TestProfileHelpDescribesWizard(t *testing.T) {
 	code, out, _ := runCLI(t, "profile", "-h")
 	if code != exitOK {

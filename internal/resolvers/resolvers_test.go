@@ -174,7 +174,12 @@ func TestExpand(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	for _, want := range []string{`"doh-cloudfare": not network, no such preset (doh-cloudflare,`, `"udp:bad host"`} {
+	for _, want := range []string{
+		`"doh-cloudfare": not network, no such preset (doh-cloudflare,`,
+		`"udp:bad host"`,
+		// Every transport the parser takes, so the hint loses none of them.
+		"no transport (doh:, dot:, udp: or tcp:)",
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not say %q", err, want)
 		}

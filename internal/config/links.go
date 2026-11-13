@@ -169,9 +169,10 @@ func ParseLink(text string) (*Link, error) {
 // linkSSHCredential returns the credential of a dnstt_ssh link: the authentication type of
 // field 23 decides whether the password of field 16 or the private key of field 24 is the
 // credential, and a value in the field the type does not use is ignored. Only an absent
-// type — SlipGate's older lines — is decided by the value in field 16 or 24. The key is
-// returned in PEM without a passphrase: the passphrase of field 25 decrypts it and is then
-// dropped, so nothing returns it.
+// type — SlipGate's older lines — is decided by the value in field 16 or 24, and a line
+// with neither is refused here rather than later by the profile rule. The key is returned
+// in PEM without a passphrase: the passphrase of field 25 decrypts it and is then dropped,
+// so nothing returns it.
 func linkSSHCredential(fields []string, password string) (string, string, error) {
 	switch strings.ToLower(strings.TrimSpace(fieldAt(fields, 23))) {
 	case "key":
@@ -179,11 +180,17 @@ func linkSSHCredential(fields []string, password string) (string, string, error)
 		return "", key, err
 	case "password":
 		// The type decides: a key in field 24 belongs to the other method and is ignored.
+		if password == "" {
+			return "", "", errors.New("field 16: a password dnstt_ssh link carries no password")
+		}
 		return password, "", nil
 	case "":
 		// An older line carries no type: a password in field 16 is a password link, and
 		// a line with field 24 alone is a key link.
-		if password == "" && fieldAt(fields, 24) != "" {
+		if password == "" && fieldAt(fields, 24) == "" {
+			return "", "", errors.New("field 16 or field 24: a dnstt_ssh link carries a password or a private key")
+		}
+		if password == "" {
 			key, err := linkSSHKey(fields)
 			return "", key, err
 		}

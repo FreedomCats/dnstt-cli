@@ -840,23 +840,32 @@ func TestCheckOneWriteStaysSequential(t *testing.T) {
 }
 
 // A cancelled batch read ends with the context cause and the key, and the stream is opened
-// and closed once.
+// and closed once. The cancel comes only after the batch has been read, and the server's end
+// stays open until the test returns: neither a timer nor the peer's close can race the
+// deadline that the cancel sets.
 func TestDialOneWriteCancel(t *testing.T) {
-	open := func(ctx context.Context) (net.Conn, error) {
+	const batch = 26 // greeting, login and request of the profile below
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	read := make(chan error, 1)
+	open := func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
+		t.Cleanup(func() { server.Close() })
 		go func() {
-			defer server.Close()
-			io.ReadFull(server, make([]byte, 26))
-			<-ctx.Done()
+			_, err := io.ReadFull(server, make([]byte, batch))
+			read <- err
+			cancel()
 		}()
 		return client, nil
 	}
 	c := &streamCounter{open: open}
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
 	start := time.Now()
 	_, err := (&SOCKS5{Open: c.Open, User: "user", Password: "secret", OneWrite: true}).
 		Dial(ctx, "192.0.2.1:80")
+	if readErr := <-read; readErr != nil {
+		t.Fatalf("the server did not read the batch: %v", readErr)
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}

@@ -340,6 +340,11 @@ func TestParseLinkRefusals(t *testing.T) {
 		{"a missing type", linkFields(map[int]string{1: ""}), []string{"field 1", "type"}},
 		{"a dnstt_ssh link without a login", linkFields(map[int]string{1: "dnstt_ssh", 15: "", 16: linkTestSSHPass}), []string{"field 15", "login"}},
 		{"a key link without a private key", sshKey(nil), []string{"field 24", "no private key"}},
+		{
+			name:   "a dnstt_ssh link with neither a password nor a key",
+			fields: linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser}),
+			want:   []string{"field 16", "field 24", "password", "private key"},
+		},
 		{"an unknown SSH authentication type", linkFields(map[int]string{1: "dnstt_ssh", 15: linkTestSSHUser, 16: linkTestSSHPass, 23: "agent"}), []string{"field 23", "password", "key"}},
 		{"a private key that is not base64", sshKey(map[int]string{24: "%%%"}), []string{"field 24", "base64"}},
 		{"an encrypted key without a passphrase", sshKey(map[int]string{24: base64.StdEncoding.EncodeToString(keys.encrypted)}), []string{"field 25", "passphrase"}},
@@ -377,6 +382,25 @@ func TestParseLinkRefusals(t *testing.T) {
 				t.Fatalf("the error repeats a value from the link: %v", err)
 			}
 		})
+	}
+
+	// The type decides: the key of field 24 belongs to the other method, so a password
+	// type without a password is a password link missing its credential, not a key link.
+	// The refusal names field 16 alone.
+	_, err := ParseLink(makeLink(22, linkFields(map[int]string{
+		1:  "dnstt_ssh",
+		15: linkTestSSHUser,
+		23: "password",
+		24: base64.StdEncoding.EncodeToString(keys.plain),
+	})))
+	if err == nil {
+		t.Fatal("a password type without a password was accepted")
+	}
+	if !strings.Contains(err.Error(), "field 16") || !strings.Contains(err.Error(), "no password") {
+		t.Fatalf("error %q does not name field 16 and the missing password", err)
+	}
+	if strings.Contains(err.Error(), "field 24") {
+		t.Fatalf("error %q names field 24, which belongs to the other method", err)
 	}
 }
 
@@ -512,21 +536,15 @@ func TestParseLinkSSH(t *testing.T) {
 
 	t.Run("a password type with no password", func(t *testing.T) {
 		// The explicit type decides: the key in field 24 belongs to the other method, so
-		// this is a password link without a password, not a key link.
-		link, err := ParseLink(makeLink(22, linkFields(map[int]string{
+		// this is a password link without a password, not a key link, and it is refused.
+		_, err := ParseLink(makeLink(22, linkFields(map[int]string{
 			1:  "dnstt_ssh",
 			15: linkTestSSHUser,
 			23: "password",
 			24: base64.StdEncoding.EncodeToString(keys.plain),
 		})))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if link.Profile.Exit.Type != "ssh" {
-			t.Fatalf("exit = %+v", link.Profile.Exit)
-		}
-		if link.Password != "" || link.Key != "" {
-			t.Fatalf("password = %q, key set: %v; want neither", link.Password, link.Key != "")
+		if err == nil || !strings.Contains(err.Error(), "field 16") || strings.Contains(err.Error(), "field 24") {
+			t.Fatalf("ParseLink = %v, want a refusal naming field 16 only", err)
 		}
 	})
 

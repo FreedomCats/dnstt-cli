@@ -235,9 +235,9 @@ func (m *menu) newExitSecretItem(ctx context.Context, e *env, _ <-chan struct{})
 	if err != nil {
 		return err
 	}
-	suffix, old := ".password", prof.Exit.PasswordRef
+	suffix, old := secret.secretSuffix(), prof.Exit.PasswordRef
 	if secret.key != "" {
-		suffix, old = ".key", prof.Exit.KeyRef
+		old = prof.Exit.KeyRef
 	}
 	newName, err := newSecretName(name, suffix, old)
 	if err != nil {
@@ -269,9 +269,10 @@ func (m *menu) newExitSecretItem(ctx context.Context, e *env, _ <-chan struct{})
 }
 
 // newSecretName is the name of the new exit secret entry: the wizard's name when the
-// profile has none yet, a fresh one otherwise, with the suffix of the shape (".password" or
-// ".key"). A fresh name is what makes the rollback possible: Put under the existing name
-// would overwrite the old value under the same id before the profile was saved.
+// profile has none yet, a fresh one otherwise, with the suffix of the shape
+// (exitSecret.secretSuffix). A fresh name is what makes the rollback possible: Put under
+// the existing name would overwrite the old value under the same id before the profile was
+// saved.
 func newSecretName(profile, suffix, oldRef string) (string, error) {
 	if oldRef == "" {
 		return profile + suffix, nil

@@ -699,6 +699,27 @@ func TestMenuDeleteProfileAsksFirst(t *testing.T) {
 	}
 }
 
+// A key profile's confirmation names the key: the profile loses what it has.
+func TestMenuDeleteKeyProfileAsksForKey(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, oneSSHProfile("home", "file:home.key"))
+
+	no := newMenuHarness(t, []scriptedAnswer{{value: "8"}, {value: "n"}, {value: "0"}})
+	if err := no.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if len(no.removed) != 0 {
+		t.Fatal("remove ran although the answer was n")
+	}
+	question := `Delete profile "home" and its exit key? (y/N): `
+	if !strings.Contains(strings.Join(no.prompter.asked, "\n"), question) {
+		t.Fatalf("the confirmation was not asked: %q", no.prompter.asked)
+	}
+	if !strings.Contains(no.out.String(), `Profile "home" (socks).`) {
+		t.Fatal("the menu did not continue after the refusal")
+	}
+}
+
 // Deleting the default leaves the set without a default: the menu asks which profile to
 // work with instead of treating the set as empty and asking for a link.
 func TestMenuDeleteDefaultLeavesTheProfileChoice(t *testing.T) {
@@ -823,6 +844,69 @@ func TestMenuNoDefaultEmptyAnswerCloses(t *testing.T) {
 	}
 	if h.choices() != 0 {
 		t.Fatalf("the menu was shown after the empty answer: %d choices", h.choices())
+	}
+}
+
+// 0 at the profile question of the no-default state cancels like an empty answer, as 0
+// leaves the menu everywhere else: no "not found" line and no second listing.
+func TestMenuNoDefaultZeroAnswerCloses(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, &config.Profiles{
+		Profile: map[string]*config.Profile{
+			"home":  menuProfile(),
+			"other": menuProfile(),
+		},
+	})
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "0"}})
+	h.menu.list = runProfileList
+	h.menu.save = saveProfiles
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v, want nil", err)
+	}
+	if !slices.Contains(h.prompter.asked, "Profile: ") {
+		t.Fatalf("the profile question was not asked; asked %q", h.prompter.asked)
+	}
+	if got := strings.Count(h.out.String(), "Profiles:"); got != 1 {
+		t.Fatalf("the profiles were listed %d times, want 1:\n%s", got, h.out.String())
+	}
+	if strings.Contains(h.out.String(), `profile "0" not found`) {
+		t.Fatalf("0 was reported as a missing profile:\n%s", h.out.String())
+	}
+	if h.choices() != 0 {
+		t.Fatalf("the menu was shown after the 0 answer: %d choices", h.choices())
+	}
+}
+
+// A profile literally named 0 is selectable: the zero answer cancels only when no such
+// profile exists.
+func TestMenuNoDefaultProfileNamedZero(t *testing.T) {
+	isolatedConnectConfig(t)
+	writeMenuProfiles(t, &config.Profiles{
+		Profile: map[string]*config.Profile{
+			"home": menuProfile(),
+			"0":    menuProfile(),
+		},
+	})
+
+	h := newMenuHarness(t, []scriptedAnswer{{value: "0"}, {value: "0"}})
+	h.menu.list = runProfileList
+	h.menu.save = saveProfiles
+
+	if err := h.runLoop(context.Background()); err != nil {
+		t.Fatalf("the loop = %v", err)
+	}
+	if !strings.Contains(h.out.String(), `Profile "0" (socks).`) {
+		t.Fatalf("the menu did not continue with profile \"0\":\n%s", h.out.String())
+	}
+
+	profiles, err := config.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profiles.DefaultProfile != "0" {
+		t.Fatalf("default_profile = %q, want 0", profiles.DefaultProfile)
 	}
 }
 

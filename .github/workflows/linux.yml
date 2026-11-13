@@ -58,6 +58,7 @@ jobs:
       - name: go test -race
         env:
           DNSTT_CLI_TEST_DBUS: '1'
+          DNSTT_CLI_TEST_IPV6: '1'
         run: go test -race -count=1 ./...
 
   # Default route, nftables, TUN — in the container's own network namespace.

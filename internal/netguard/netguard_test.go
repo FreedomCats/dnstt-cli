@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -143,7 +144,8 @@ func TestLogf(t *testing.T) {
 
 // A real "udp6" socket on ":0" is IPv6-only (Go sets IPV6_V6ONLY) and is bound for IPv6
 // only; a "udp" socket on ":0" is dual-stack and is bound as one. Control gets "udp6" and
-// the unspecified address for both. Skipped where the kernel has no IPv6.
+// the unspecified address for both. Skipped where the kernel has no IPv6, but not under
+// DNSTT_CLI_TEST_IPV6=1: there a skip would hide that the check did not run.
 func TestApplyReadsV6Only(t *testing.T) {
 	for _, tc := range []struct {
 		network, want, wantSingle string
@@ -162,10 +164,16 @@ func TestApplyReadsV6Only(t *testing.T) {
 			}}
 			conn, err := lc.ListenPacket(context.Background(), tc.network, ":0")
 			if err != nil {
+				if os.Getenv("DNSTT_CLI_TEST_IPV6") == "1" {
+					t.Fatalf("no IPv6 socket, but DNSTT_CLI_TEST_IPV6=1: %v", err)
+				}
 				t.Skipf("no IPv6 socket here: %v", err)
 			}
 			conn.Close()
 			if seen == "udp4 :0" || seen == "udp4 0.0.0.0:0" {
+				if os.Getenv("DNSTT_CLI_TEST_IPV6") == "1" {
+					t.Fatal("the socket is IPv4, but DNSTT_CLI_TEST_IPV6=1")
+				}
 				t.Skip("no IPv6 here: the socket is IPv4")
 			}
 			if seen != "udp6 :0" && seen != "udp6 [::]:0" {

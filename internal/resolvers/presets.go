@@ -51,7 +51,7 @@ func Expand(entries []string) ([]Resolver, error) {
 			r, ok = Resolver{Network: true}, true
 		}
 		if !ok && !strings.Contains(e, ":") {
-			errs = append(errs, fmt.Errorf("resolver %q: not %s, no such preset (%s) and no transport (doh:, dot:, udp:)",
+			errs = append(errs, fmt.Errorf("resolver %q: not %s, no such preset (%s) and no transport (doh:, dot:, udp: or tcp:)",
 				e, NetworkEntry, strings.Join(presetNames(), ", ")))
 			continue
 		}

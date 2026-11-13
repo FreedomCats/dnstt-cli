@@ -30,12 +30,18 @@ type exitSecret struct {
 	key      string
 }
 
+// secretSuffix is the suffix of the store entry name: .key or .password. The suffix is
+// built here alone, so the wizard, the import and the menu cannot disagree about it.
+func (s exitSecret) secretSuffix() string {
+	if s.key != "" {
+		return ".key"
+	}
+	return ".password"
+}
+
 // secretName is the name of the store entry: <profile>.password or <profile>.key.
 func (s exitSecret) secretName(profile string) string {
-	if s.key != "" {
-		return profile + ".key"
-	}
-	return profile + ".password"
+	return profile + s.secretSuffix()
 }
 
 // kind is the credential in the words of the messages, without the article: "exit
